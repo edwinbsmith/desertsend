@@ -1,0 +1,14 @@
+{
+  "name": "drupal/desertsend",
+  "type": "drupal-module",
+  "description": "Desert's End Church Custom Settings",
+  "keywords": ["Drupal"],
+  "license": "GPL-2.0+",
+  "homepage": "https://www.drupal.org/project/desertsend",
+  "minimum-stability": "dev",
+  "support": {
+    "issues": "https://www.drupal.org/project/issues/desertsend",
+    "source": "http://cgit.drupalcode.org/desertsend"
+  },
+  "require": { }
+}

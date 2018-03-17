@@ -1,0 +1,96 @@
+.main-message {
+  padding: 2rem 0;
+  background: get-color(secondary);
+  box-shadow: inset 0 1px 3px get-color(primary);
+
+  @mixin image-sizes($reversed: false){
+    $small: 210px;
+    $medium: 460px;
+    $large: 500px;
+
+    @include breakpoint(small) {
+      height: $small;
+      @if($reversed) {
+        margin-top: -$small;
+      }
+    }
+
+    @include breakpoint(medium) {
+      height: $medium;
+      @if($reversed) {
+        margin-top: -$medium;
+      }
+    }
+
+    @include breakpoint(large) {
+      height: $large;
+      @if($reversed) {
+        margin-top: -$large;
+      }
+    }
+  }
+
+  &__wrap {
+    @include image-sizes();
+    overflow: hidden;
+  }
+
+  &__image {
+    @include image-sizes();
+    height: 105% !important;
+    width: 105%;
+    margin-top: -1%;
+    margin-left: -1%;
+
+    background: url('http://www.desertsend.com/sites/default/files/message_graphics/james-960x540.jpg') center center;
+    background-size: cover;
+    filter: blur(5px);
+    -webkit-filter: blur(5px);
+    z-index: -1;
+  }
+
+  &__title-wrap {
+    @include image-sizes(true);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+  }
+
+  &__title {
+    font-weight: 900;
+    z-index: 2;
+    font-size: 1.5rem;
+
+    a {
+      color: $white;
+    }
+
+    @include breakpoint(medium) {
+      font-size: 3.25rem;
+    }
+
+    @include breakpoint(large) {
+      font-size: 4.25rem;
+    }
+
+    small {
+      display: block;
+      padding-bottom: 3px;
+      font-weight: 900;
+    }
+  }
+
+  &__meta {
+    height: 150px;
+    background-color: $primary-color;
+  }
+}
+
+.info-panels {
+  .panel {
+    height: 250px;
+    background-color: $dark-gray;
+  }
+}

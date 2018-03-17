@@ -1,0 +1,102 @@
+.footer {
+
+  // Override Drupal setting
+  #block-phoenix-footer {
+    position: initial;
+  }
+
+  background-color: $light-gray;
+  @include breakpoint(large) {
+
+    margin-top: 50px;
+    padding: 50px;
+
+     & > .row > .columns {
+      height: 300px;
+    }
+  }
+
+  &__search {
+    input[type='submit'] {
+      font-family: FontAwesome;
+      background-color: map-get($de-color, 'primary');
+    }
+  }
+
+  &__info {
+    position: relative;
+
+
+    @include breakpoint(medium down) {
+      padding-top: 1rem;
+      padding-bottom: 1rem;
+    }
+  }
+
+  &__links {
+
+    li {
+
+      padding-bottom: 3px;
+      border-bottom: 1px solid transparent;
+
+      &:hover {
+        border-bottom: 1px solid $anchor-color-hover;
+      }
+
+      @include breakpoint(medium down) {
+        padding-top: 1rem;
+        margin-bottom: 1rem;
+      }
+    }
+
+    @include breakpoint(medium down) {
+      text-align: center;
+      background-color: $light-gray;
+    }
+
+    @include breakpoint(large) {
+      position: absolute;
+      bottom: 0;
+    }
+
+  }
+}
+
+.contact {
+  padding: 1rem;
+  background-color: map-get($de-color, secondary);
+  @include breakpoint(large) {
+
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .menu {
+    li {
+      padding-top: 5px;
+      padding-bottom: 5px;
+      color: $white;
+      font-size: .9rem;
+      i {
+        color: $primary-color;
+        width: 24px;
+      }
+    }
+  }
+
+  &__social {
+    color: $primary-color;
+    font-size: 24px;
+  }
+}
+
+.subfooter {
+  background-color: $primary-color;
+  color: $white;
+
+  .copyright {
+    padding: 1rem 0;
+    margin-bottom: 0;
+  }
+}

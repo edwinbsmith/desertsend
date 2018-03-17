@@ -1,0 +1,6 @@
+.inline-search-form {
+  input[type='submit'] {
+    font-family: FontAwesome;
+    background-color: map-get($de-color, 'primary');
+  }
+}

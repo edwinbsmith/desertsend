@@ -1,0 +1,24 @@
+name: Phoenix
+type: theme
+base theme: stable
+description: 'A theme for Deserts End based on the Stark theme and Foundation for Sites.'
+package: DesertsEnd
+version: VERSION
+core: 8.x
+
+# Define the global styles and Foundation libraries.
+# Eventually, this can be defined with more granularity.
+libraries:
+  - phoenix/global
+regions:
+  primary_menu: 'Primary menu'
+  header: Header
+  highlighted: Highlighted
+  featured_top: 'Featured top'
+  breadcrumb: Breadcrumb
+  content: Content
+  sidebar_left: 'Sidebar left'
+  footer: Footer
+regions_hidden:
+  page_top: 'Page Top'
+  page_bottom: 'Page bottom'

@@ -1,0 +1,25 @@
+{#
+/**
+ * @file
+ * Theme override for page titles.
+ *
+ * Available variables:
+ * - title_attributes: HTML attributes for the page title element.
+ * - title_prefix: Additional output populated by modules, intended to be
+ *   displayed in front of the main title tag that appears in the template.
+ * - title: The page title, for use in the actual content.
+ * - title_suffix: Additional output populated by modules, intended to be
+ *   displayed after the main title tag that appears in the template.
+ */
+#}
+{{ title_prefix }}
+{% if title %}
+  <div class="grid-x grid-padding-x align-center">
+    <div class="cell large-7">
+      <div class="title-wrap">
+        <h2{{ title_attributes.setAttribute('id', 'site-title').addClass('title-text') }}>{{ title }}</h2>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{{ title_suffix }}

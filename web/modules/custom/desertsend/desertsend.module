@@ -1,0 +1,103 @@
+<?php
+
+/**
+ * @file
+ * Contains phoenix.module.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+
+/**
+ * Implements hook_help().
+ */
+function desertsend_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    // Main module help for the phoenix module.
+    case 'help.page.desertsend':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('Desert&#039;s End Church Custom Settings') . '</p>';
+      return $output;
+
+    default:
+  }
+}
+
+use Drupal\Core\Form\FormStateInterface;
+
+/**
+ * Implements hook_form_alter() on behalf of phoenix.module.
+ *
+ * @param                                      $form
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ */
+function desertsend_form_system_site_information_settings_alter(&$form, FormStateInterface $form_state) {
+
+  $config = \Drupal::configFactory()->getEditable('desertsend.contact');
+
+  $new_form = ['contact_information' => [
+    '#type' => 'details',
+    '#title' => t("Desert's End Contact Information"),
+    '#open' => TRUE,
+  ]];
+  $new_form['contact_information']['de_mailing_address'] = [
+    '#type' => 'textfield',
+    '#title' => t('Mailing Address'),
+    '#default_value' => $config->get('mailing_address'),
+    '#required' => FALSE,
+  ];
+  $new_form['contact_information']['de_meeting_address'] = [
+    '#type' => 'textfield',
+    '#title' => t('Meeting Address'),
+    '#default_value' => $config->get('meeting_address'),
+    '#description' => t("The address for Sunday morning meetings"),
+  ];
+  $new_form['contact_information']['de_meeting_details'] = [
+    '#type' => 'textfield',
+    '#title' => t('Meeting Details'),
+    '#description' => t('A summary of Sunday morning when and where'),
+    '#maxlength' => 255,
+    '#default_value' => $config->get('meeting_details'),
+  ];
+  $new_form['contact_information']['de_email'] = array(
+    '#type' => 'email',
+    '#title' => t('Contact Email'),
+    '#default_value' => $config->get('office_email'),
+  );
+  $new_form['contact_information']['de_phone'] = array(
+    '#type' => 'tel',
+    '#title' => t('Contact Number'),
+    '#default_value' => $config->get('office_phone'),
+  );
+  $form = _array_insert_after($form, 'site_information', $new_form);
+
+  $form['#submit'][] = 'desertsend_form_save_location';
+}
+
+function desertsend_form_save_location($form, FormStateInterface $form_state) {
+  \Drupal::configFactory()
+    ->getEditable('desertsend.contact')
+    ->set('meeting_address', $form_state->getValue('de_meeting_address'))
+    ->set('mailing_address', $form_state->getValue('de_mailing_address'))
+    ->set('meeting_details', $form_state->getValue('de_meeting_details'))
+    ->set('office_email', $form_state->getValue('de_email'))
+    ->set('office_phone', $form_state->getValue('de_phone'))
+    ->save();
+}
+
+/**
+ * Insert a value or key/value pair after a specific key in an array.  If key doesn't exist, value is appended
+ * to the end of the array.
+ *
+ * @param array $array
+ * @param string $key
+ * @param array $new
+ *
+ * @return array
+ */
+function _array_insert_after( array $array, $key, array $new ) {
+  $keys = array_keys( $array );
+  $index = array_search( $key, $keys );
+  $pos = false === $index ? count( $array ) : $index + 1;
+  return array_merge( array_slice( $array, 0, $pos ), $new, array_slice( $array, $pos ) );
+}

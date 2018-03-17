@@ -1,0 +1,61 @@
+
+.site-title {
+  overflow: hidden;
+
+  &__wrap {
+    position: relative;
+    height: 300px;
+
+  }
+
+  &__text-wrap {
+    position: absolute;
+    top: 50%;
+    left: 35%;
+    transform: translateY(-25%) translateX(-25%);
+
+    @include breakpoint(medium only) {
+      left: 5%;
+      transform: translateY(-25%);
+    }
+  }
+
+  &__text {
+    color: #5A4A42;
+    line-height: .5em;
+    text-rendering: optimizeLegibility !important;
+    -webkit-text-stroke: 0.3px;
+    -webkit-font-smoothing: antialiased !important;
+    text-shadow: 1px 1px 1px rgba(0,0,0,0.04);
+    font-weight: 300;
+
+    font-size: 5.5rem;
+
+    & > span {
+      font-weight: 900;
+      color: #006A81;
+    }
+
+    small {
+      font-size: .35em;
+      word-spacing: -5px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+
+      & > span {
+        font-weight: 900;
+      }
+    }
+  }
+
+  &__logo {
+    height: 300px;
+    float: right;
+
+    @include breakpoint(medium only) {
+      right: -45px;
+      position: absolute;
+      z-index: -1;
+    }
+  }
+}

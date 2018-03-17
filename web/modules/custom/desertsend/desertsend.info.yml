@@ -1,0 +1,5 @@
+name: desertsend
+type: module
+description: Desert's End Church Custom Settings
+core: 8.x
+package: Desert's End

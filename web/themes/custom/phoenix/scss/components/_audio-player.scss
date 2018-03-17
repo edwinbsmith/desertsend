@@ -1,0 +1,17 @@
+.message-player {
+  .mejs__container {
+    background-color: transparent !important;
+  }
+  .mejs__controls {
+    background: none !important;
+  }
+  .button {
+    color: $white;
+    border-color: $white;
+    margin: 0;
+    &:hover, &:focus {
+      color: $light-gray;
+      border-color: $light-gray;
+    }
+  }
+}
