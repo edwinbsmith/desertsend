@@ -1,6 +1,6 @@
 name: Phoenix
 type: theme
-base theme: stable
+base theme: classy
 description: 'A theme for Deserts End based on the Stark theme and Foundation for Sites.'
 package: DesertsEnd
 version: VERSION
