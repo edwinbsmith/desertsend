@@ -43,18 +43,20 @@
  */
 #}
 <div class="layout-container">
-  {{ page.primary_menu }}
+  {{ page.meta_header }}
 
   <header role="banner">
     {% if is_front %}
       <div class="site-title show-for-medium">
         <div class="grid-container">
-          <div class="cell large-auto">
-            <div class="site-title__wrap">
-              <div class="site-title__text-wrap">
-                <h1 id="site-title" class="site-title__text show-for-medium-up">desert's <span>end</span><br><small><span>church</span> community</small></h1>
+          <div class="grid-x grid-margin-x">
+            <div class="cell large-auto">
+              <div class="site-title__wrap">
+                <div class="site-title__text-wrap">
+                  <h1 id="site-title" class="site-title__text show-for-medium-up">desert's <span>end</span><br><small><span>church</span> community</small></h1>
+                </div>
+                <img class="site-title__logo" src="/{{ theme_path }}/images/deserts-end-logo.png" alt="">
               </div>
-              <img class="site-title__logo" src="/{{ theme_path }}/images/deserts-end-logo.png" alt="">
             </div>
           </div>
         </div>
@@ -72,46 +74,29 @@
   {{ page.help }}
 
   <main role="main">
-
-    {% if page.sidebar_left %}
-    <div class="row">
-      <div class="medium-4 columns show-for-large">
-        <aside class="layout-sidebar-first" role="complementary">
-          {{ page.sidebar_left }}
-        </aside>
-      </div>
-      <div class="medium-12 large-8 columns">
-        {% endif %}
-
-        <div class="layout-content">
-          {{ page.content }}
-        </div>{# /.layout-content #}
-
-        {% if page.sidebar_left %}
-      </div>
+    <div class="layout-content">
+      {{ page.content }}
     </div>
-    {% endif %}
-
   </main>
   <footer role="contentinfo" class="footer">
-    <div class="row">
-      <div class="small-12 large-6 columns contact">
-        <div class="row">
-          <div class="small-12 medium-6 columns">
+    <div class="grid-x grid-padding-x">
+      <div class="cell large-6 contact">
+        <div class="grid-x grid-padding-x">
+          <div class="cell medium-6">
             {{ page.footer.desertsendmap }}
           </div>
-          <div class="small-12 medium-6 columns">
+          <div class="cell medium-6">
             <ul class="vertical menu">
               <li>
-                <div class="row">
-                  <div class="small-1 columns"><i class="fa fa-map-marker"></i></div>
-                  <div class="small-10 columns">Sunday Morning<br>{{ contact.meeting_address }}</div>
+                <div class="grid-x grid-padding-x">
+                  <div class="cell small-1"><i class="fas fa-map-marker"></i></div>
+                  <div class="cell small-10">Sunday Morning<br>{{ contact.meeting_address }}</div>
                 </div>
               </li>
               <li>
-                <div class="row">
-                  <div class="small-1 columns"><i class="fa fa-envelope-o"></i></div>
-                  <div class="small-10 columns"> Mailing Address<br>{{ contact.mailing_address }}</div>
+                <div class="grid-x grid-padding-x">
+                  <div class="cell small-1"><i class="fas fa-envelope"></i></div>
+                  <div class="cell small-10"> Mailing Address<br>{{ contact.mailing_address }}</div>
                 </div>
 
               </li>
@@ -120,24 +105,24 @@
             </ul>
             <br>
             <ul class="simple menu contact__social">
-              <li><a href="https://www.facebook.com/desertsend" target="_blank"><i class="fa fa-facebook-square"></i></a></li>
-              <li><a href="https://twitter.com/desertsend" target="_blank"><i class="fa fa-twitter-square"></i></a></li>
-              <li><a href="https://www.instagram.com/thewellatasu/" target="_blank"><i class="fa fa-instagram"></i></a></li>
+              <li><a href="https://www.facebook.com/desertsend" target="_blank"><i class="fab fa-facebook-square"></i></a></li>
+              <li><a href="https://twitter.com/desertsend" target="_blank"><i class="fab fa-twitter-square"></i></a></li>
+              <li><a href="https://www.instagram.com/thewellatasu/" target="_blank"><i class="fab fa-instagram"></i></a></li>
             </ul>
           </div>
         </div>
       </div>
-      <div class="small-12 large-6 columns footer__info">
-        <div class="row">
-          <div class="small-12 medium-6 columns">
+      <div class="cell large-6 footer__info">
+        <div class="grid-x grid-padding-x">
+          <div class="cell medium-6">
             {{ page.footer.thevisionofdesertsend }}
           </div>
-          <div class="small-12 medium-6 columns">
+          <div class="cell medium-6">
             {{ page.footer.phoenix_search }}
           </div>
         </div>
-        <div class="row">
-          <div class="small-12 columns">
+        <div class="grid-x grid-padding-x">
+          <div class="cell">
             {{ page.footer.phoenix_footer }}
           </div>
         </div>
@@ -145,8 +130,8 @@
     </div>
   </footer>
   <div class="subfooter">
-    <div class="row">
-      <div class="small-12 medium-6 columns end">
+    <div class="grid-x grid-padding-x">
+      <div class="cell medium-6 columns end">
         <p class="copyright">&copy; {{ "now"|date("Y") }} Desert's End Church. Soli Deo Gloria.</p>
       </div>
     </div>

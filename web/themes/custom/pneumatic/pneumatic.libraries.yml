@@ -7,6 +7,7 @@ global:
     js/foundation.min.js: {}
     js/foundation_init.js: {}
     js/top_bar_active.js: {}
+    js/fontawesome-all.min.js: {}
     # js/motion-ui.min.js: {}
   dependencies:
     - core/jquery
