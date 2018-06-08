@@ -1,0 +1,32 @@
+{% block content %}
+<div class="row">
+  <div class="small-12 columns">
+    <div class="message-filter">
+      {# Hide this search field and hopefully save it for later! #}
+      {#<h4>Find Messages</h4>
+       <div class="message-filter__search">
+
+         <form>
+           <div class="input-group">
+             <input class="input-group-field" type="text" placeholder="Search messages...">
+             <div class="input-group-button">
+               <input type="submit" class="button" value="&#xf002;">
+             </div>
+           </div>
+         </form>
+       </div>#}
+      <h4>See messages...</h4>
+      <ul class="vertical menu">
+        <li><a href="">By Speaker <i class="fa fa-chevron-right" aria-hidden="true"></i></a></li>
+        <li><a href="">By Series <i class="fa fa-chevron-right" aria-hidden="true"></i></a></li>
+        <li><a href="">By Event <i class="fa fa-chevron-right" aria-hidden="true"></i></a></li>
+      </ul>
+      <h4>Topics</h4>
+      <a href="">Genesis</a> | <a href="">Exodus</a> |
+      <a href="">Leviticus</a> | <a href="">Numbers</a> |
+      <a href="">Deuteronomy</a> | <a href="">Joshua</a>
+      {{ content }}
+    </div>
+  </div>
+</div>
+{% endblock %}

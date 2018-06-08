@@ -1,0 +1,29 @@
+name: Pneumatic
+type: theme
+base theme: stable
+description: 'A church theme based on Foundation 6.4.5'
+version: VERSION
+project: deserts_end
+core: 8.x
+
+libraries:
+  - pneumatic/global
+
+regions:
+  meta_header: 'Meta header'
+  header: 'Header'
+  help: 'Help'
+  page_top: 'Page top'
+  page_bottom: 'Page bottom'
+  highlighted: 'Highlighted'
+  content: 'Content'
+  sidebar_first: 'Left Sidebar'
+  sidebar_second: 'Right Sidebar'
+  footer_first: 'Footer first column'
+  footer_middle: 'Footer middle column'
+  footer_last: 'Footer last column'
+  left_off_canvas: 'Left off canvas'
+  right_off_canvas: 'Right off canvas'
+regions_hidden:
+  page_top: 'Page Top'
+  page_bottom: 'Page bottom'

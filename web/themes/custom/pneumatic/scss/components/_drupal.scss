@@ -1,0 +1,24 @@
+.visually-hidden {
+  display: none;
+}
+
+#block-phoenix-local-tasks {
+  background: $light-gray;
+  padding: 0;
+  box-shadow: inset 0 1px 3px $dark-gray;
+
+  .button-group {
+    margin: 0;
+
+    .is-active {
+      background-color: map-get($de-color, secondary);
+    }
+  }
+}
+
+#views-exposed-form-search-content-main {
+  input[type='submit'] {
+    font-family: FontAwesome;
+    background-color: map-get($de-color, 'primary');
+  }
+}
