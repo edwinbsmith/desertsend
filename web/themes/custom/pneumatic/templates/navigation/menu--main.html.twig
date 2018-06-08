@@ -65,7 +65,11 @@
     {% for item in items %}
       {# set item_classes = [ item.below is not empty ? 'opens-right', 'menu-text' ] #}
       <li{{ item.attributes.addClass('menu-text') }}>
-        {{ link(item.title, item.url) }}
+        {% if item.below %}
+          <a href="{{ item.url }}">{{ item.title }} <i class="fas fa-chevron-down"></i></a>
+        {% else %}
+          {{ link(item.title, item.url) }}
+        {% endif %}
         {% if item.below %}
           <ul class="menu vertical nested">
             {{ menu.menu_links(item.below, attributes, menu_level + 1) }}
