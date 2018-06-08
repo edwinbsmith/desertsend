@@ -61,15 +61,23 @@
   //right: 1.25rem;
 }
 
-.is-accordion-submenu-parent>a {
+.is-accordion-submenu-parent > a .fa-chevron-down {
+  float: right;
   //position: relative;
 }
 
 .is-accordion-submenu-parent>a::after {
+  display: none !important;
   // @include chevron-arrow-down();
   //right: 1.5rem;
 }
 
 .is-accordion-submenu-parent[aria-expanded='true']>a::after {
+  display: none !important;
+  //transform: scaleY(-1) translateY(50%);
+}
+
+.is-accordion-submenu-parent[aria-expanded='true'] > a .fa-chevron-down {
+  transform: rotate(180deg);
   //transform: scaleY(-1) translateY(50%);
 }
