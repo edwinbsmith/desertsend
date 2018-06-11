@@ -174,6 +174,14 @@ function pneumatic_preprocess_node(&$variables) {
 
   }
 
+  if ($variables['view_mode'] === 'teaser' && 'message' === $node->getType()) {
+    /** @var \Drupal\taxonomy\Entity\Term $term */
+    $term = \Drupal::routeMatch()->getParameter('taxonomy_term');
+    if ( null !== $term ) {
+      $variables['vocabulary'] = $term->bundle();
+    }
+  }
+
   // Remove the "Add new comment" link on teasers or when the comment form is
   // displayed on the page.
   if ($variables['teaser'] || !empty($variables['content']['comments']['comment_form'])) {

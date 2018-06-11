@@ -74,8 +74,13 @@
   <div{{ content_attributes.addClass('cell large-6') }}>
     <a href="{{ url }}"><h4>{{ label }}</h4></a>
     <p>
-      <span class="message-teaser__speaker">{{ content.field_message_author }}</span> | <span class="message-teaser__date">{{ content.field_message_date }}</span><br>
-      <span class="message-teaser__series">Series: {{ content.field_message_series }}</span>
+      <span class="message-teaser__date">{{ content.field_message_date }}</span><br>
+      {% if vocabulary != 'speaker' %}
+        <span class="message-teaser__speaker">{{ content.field_message_author }}</span><br>
+      {% endif %}
+      {% if vocabulary != 'series' %}
+        <span class="message-teaser__series">Series: {{ content.field_message_series }}</span>
+      {% endif %}
     </p>
   </div>
 </article>

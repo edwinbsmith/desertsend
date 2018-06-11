@@ -3,3 +3,15 @@
   padding: 1rem;
   font-size: .9rem;
 }
+
+.series-archive {
+  margin-top: 25px;
+}
+
+.series-topics {
+  ul {
+    columns: 3;
+    -webkit-columns: 3;
+    -moz-columns: 3;
+  }
+}
