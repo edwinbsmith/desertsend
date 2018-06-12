@@ -5,6 +5,7 @@
  * Functions to support theming in the pneumatic theme.
  */
 
+use Drupal\block_content\BlockContentInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Template\Attribute;
 use Drupal\Core\Link;
@@ -204,6 +205,18 @@ function pneumatic_preprocess_block(&$variables) {
   } catch (Exception $e) {
     $variables['is_front'] = FALSE;
   }
+
+  $content = $variables['content'];
+  if (isset($content['#block_content']) && $content['#block_content'] instanceof BlockContentInterface) {
+    /** @var Drupal\block_content\Entity\BlockContent $block_content */
+    $block_content = $content['#block_content'];
+    if ($block_content->bundle() === 'hero_banner') {
+      /** @var Drupal\media\Entity\Media $media */
+      $media = $variables['content']['field_image'][0]['#media'];
+      $image = file_create_url($media->get('thumbnail')->entity->getFileUri());
+      $variables['attributes']['style'] = 'background-image: url('.$image.');';
+    }
+  }
 }
 
 /**
@@ -235,6 +248,24 @@ function pneumatic_theme_suggestions_form_alter(array &$suggestions, array $vari
   ];
   if (in_array($variables['element']['#id'], $search_field_ids)) {
     $suggestions[] = 'form__search_block_form';
+  }
+}
+
+function pneumatic_theme_suggestions_block_alter(array &$suggestions, array $variables) {
+  $content = $variables['elements']['content'];
+  if (isset($content['#block_content']) && $content['#block_content'] instanceof BlockContentInterface) {
+    /** @var Drupal\block_content\Entity\BlockContent $block_content */
+    $block_content = $content['#block_content'];
+    $block_type_suggestion = 'block__block_content_' . $block_content->bundle();
+    $suggestions_rev = array_reverse($suggestions); // Taking care of observed duplication of block__block_content
+    $index = array_search('block__block_content', $suggestions_rev);
+    if (is_numeric($index)) {
+      array_splice($suggestions_rev, $index, 0, $block_type_suggestion);
+      $suggestions = array_reverse($suggestions_rev);
+    }
+    else {
+      $suggestions[] = $block_type_suggestion;
+    }
   }
 }
 
