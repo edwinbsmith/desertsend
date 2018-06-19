@@ -16,33 +16,274 @@ var topLevel = typeof global !== 'undefined' ? global :
     typeof window !== 'undefined' ? window : {}
 var minDoc = _dereq_(1);
 
+var doccy;
+
 if (typeof document !== 'undefined') {
-    module.exports = document;
+    doccy = document;
 } else {
-    var doccy = topLevel['__GLOBAL_DOCUMENT_CACHE@4'];
+    doccy = topLevel['__GLOBAL_DOCUMENT_CACHE@4'];
 
     if (!doccy) {
         doccy = topLevel['__GLOBAL_DOCUMENT_CACHE@4'] = minDoc;
     }
-
-    module.exports = doccy;
 }
+
+module.exports = doccy;
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{"1":1}],3:[function(_dereq_,module,exports){
 (function (global){
+var win;
+
 if (typeof window !== "undefined") {
-    module.exports = window;
+    win = window;
 } else if (typeof global !== "undefined") {
-    module.exports = global;
+    win = global;
 } else if (typeof self !== "undefined"){
-    module.exports = self;
+    win = self;
 } else {
-    module.exports = {};
+    win = {};
 }
+
+module.exports = win;
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{}],4:[function(_dereq_,module,exports){
+(function (root) {
+
+  // Store setTimeout reference so promise-polyfill will be unaffected by
+  // other code modifying setTimeout (like sinon.useFakeTimers())
+  var setTimeoutFunc = setTimeout;
+
+  function noop() {}
+  
+  // Polyfill for Function.prototype.bind
+  function bind(fn, thisArg) {
+    return function () {
+      fn.apply(thisArg, arguments);
+    };
+  }
+
+  function Promise(fn) {
+    if (typeof this !== 'object') throw new TypeError('Promises must be constructed via new');
+    if (typeof fn !== 'function') throw new TypeError('not a function');
+    this._state = 0;
+    this._handled = false;
+    this._value = undefined;
+    this._deferreds = [];
+
+    doResolve(fn, this);
+  }
+
+  function handle(self, deferred) {
+    while (self._state === 3) {
+      self = self._value;
+    }
+    if (self._state === 0) {
+      self._deferreds.push(deferred);
+      return;
+    }
+    self._handled = true;
+    Promise._immediateFn(function () {
+      var cb = self._state === 1 ? deferred.onFulfilled : deferred.onRejected;
+      if (cb === null) {
+        (self._state === 1 ? resolve : reject)(deferred.promise, self._value);
+        return;
+      }
+      var ret;
+      try {
+        ret = cb(self._value);
+      } catch (e) {
+        reject(deferred.promise, e);
+        return;
+      }
+      resolve(deferred.promise, ret);
+    });
+  }
+
+  function resolve(self, newValue) {
+    try {
+      // Promise Resolution Procedure: https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure
+      if (newValue === self) throw new TypeError('A promise cannot be resolved with itself.');
+      if (newValue && (typeof newValue === 'object' || typeof newValue === 'function')) {
+        var then = newValue.then;
+        if (newValue instanceof Promise) {
+          self._state = 3;
+          self._value = newValue;
+          finale(self);
+          return;
+        } else if (typeof then === 'function') {
+          doResolve(bind(then, newValue), self);
+          return;
+        }
+      }
+      self._state = 1;
+      self._value = newValue;
+      finale(self);
+    } catch (e) {
+      reject(self, e);
+    }
+  }
+
+  function reject(self, newValue) {
+    self._state = 2;
+    self._value = newValue;
+    finale(self);
+  }
+
+  function finale(self) {
+    if (self._state === 2 && self._deferreds.length === 0) {
+      Promise._immediateFn(function() {
+        if (!self._handled) {
+          Promise._unhandledRejectionFn(self._value);
+        }
+      });
+    }
+
+    for (var i = 0, len = self._deferreds.length; i < len; i++) {
+      handle(self, self._deferreds[i]);
+    }
+    self._deferreds = null;
+  }
+
+  function Handler(onFulfilled, onRejected, promise) {
+    this.onFulfilled = typeof onFulfilled === 'function' ? onFulfilled : null;
+    this.onRejected = typeof onRejected === 'function' ? onRejected : null;
+    this.promise = promise;
+  }
+
+  /**
+   * Take a potentially misbehaving resolver function and make sure
+   * onFulfilled and onRejected are only called once.
+   *
+   * Makes no guarantees about asynchrony.
+   */
+  function doResolve(fn, self) {
+    var done = false;
+    try {
+      fn(function (value) {
+        if (done) return;
+        done = true;
+        resolve(self, value);
+      }, function (reason) {
+        if (done) return;
+        done = true;
+        reject(self, reason);
+      });
+    } catch (ex) {
+      if (done) return;
+      done = true;
+      reject(self, ex);
+    }
+  }
+
+  Promise.prototype['catch'] = function (onRejected) {
+    return this.then(null, onRejected);
+  };
+
+  Promise.prototype.then = function (onFulfilled, onRejected) {
+    var prom = new (this.constructor)(noop);
+
+    handle(this, new Handler(onFulfilled, onRejected, prom));
+    return prom;
+  };
+
+  Promise.all = function (arr) {
+    var args = Array.prototype.slice.call(arr);
+
+    return new Promise(function (resolve, reject) {
+      if (args.length === 0) return resolve([]);
+      var remaining = args.length;
+
+      function res(i, val) {
+        try {
+          if (val && (typeof val === 'object' || typeof val === 'function')) {
+            var then = val.then;
+            if (typeof then === 'function') {
+              then.call(val, function (val) {
+                res(i, val);
+              }, reject);
+              return;
+            }
+          }
+          args[i] = val;
+          if (--remaining === 0) {
+            resolve(args);
+          }
+        } catch (ex) {
+          reject(ex);
+        }
+      }
+
+      for (var i = 0; i < args.length; i++) {
+        res(i, args[i]);
+      }
+    });
+  };
+
+  Promise.resolve = function (value) {
+    if (value && typeof value === 'object' && value.constructor === Promise) {
+      return value;
+    }
+
+    return new Promise(function (resolve) {
+      resolve(value);
+    });
+  };
+
+  Promise.reject = function (value) {
+    return new Promise(function (resolve, reject) {
+      reject(value);
+    });
+  };
+
+  Promise.race = function (values) {
+    return new Promise(function (resolve, reject) {
+      for (var i = 0, len = values.length; i < len; i++) {
+        values[i].then(resolve, reject);
+      }
+    });
+  };
+
+  // Use polyfill for setImmediate for performance gains
+  Promise._immediateFn = (typeof setImmediate === 'function' && function (fn) { setImmediate(fn); }) ||
+    function (fn) {
+      setTimeoutFunc(fn, 0);
+    };
+
+  Promise._unhandledRejectionFn = function _unhandledRejectionFn(err) {
+    if (typeof console !== 'undefined' && console) {
+      console.warn('Possible Unhandled Promise Rejection:', err); // eslint-disable-line no-console
+    }
+  };
+
+  /**
+   * Set the immediate function to execute callbacks
+   * @param fn {function} Function to execute
+   * @deprecated
+   */
+  Promise._setImmediateFn = function _setImmediateFn(fn) {
+    Promise._immediateFn = fn;
+  };
+
+  /**
+   * Change the function to execute on unhandled rejection
+   * @param {function} fn Function to execute on unhandled rejection
+   * @deprecated
+   */
+  Promise._setUnhandledRejectionFn = function _setUnhandledRejectionFn(fn) {
+    Promise._unhandledRejectionFn = fn;
+  };
+  
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = Promise;
+  } else if (!root.Promise) {
+    root.Promise = Promise;
+  }
+
+})(this);
+
+},{}],5:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -51,30 +292,18 @@ Object.defineProperty(exports, "__esModule", {
 
 var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _en = _dereq_(14);
+var _en = _dereq_(15);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Locale.
- *
- * This object manages translations with pluralization. Also deals with WordPress compatibility.
- * @type {Object}
- */
 var i18n = { lang: 'en', en: _en.EN };
 
-/**
- * Language setter/getter
- *
- * @param {*} args  Can pass the language code and/or the translation strings as an Object
- * @return {string}
- */
 i18n.language = function () {
 	for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
 		args[_key] = arguments[_key];
@@ -86,13 +315,12 @@ i18n.language = function () {
 			throw new TypeError('Language code must be a string value');
 		}
 
-		if (!args[0].match(/^[a-z]{2}(\-[a-z]{2})?$/i)) {
-			throw new TypeError('Language code must have format `xx` or `xx-xx`');
+		if (!/^[a-z]{2,3}((\-|_)[a-z]{2})?$/i.test(args[0])) {
+			throw new TypeError('Language code must have format 2-3 letters and. optionally, hyphen, underscore followed by 2 more letters');
 		}
 
 		i18n.lang = args[0];
 
-		// Check if language strings were added; otherwise, check the second argument or set to English as default
 		if (i18n[args[0]] === undefined) {
 			args[1] = args[1] !== null && args[1] !== undefined && _typeof(args[1]) === 'object' ? args[1] : {};
 			i18n[args[0]] = !(0, _general.isObjectEmpty)(args[1]) ? args[1] : _en.EN;
@@ -104,13 +332,6 @@ i18n.language = function () {
 	return i18n.lang;
 };
 
-/**
- * Translate a string in the language set up (or English by default)
- *
- * @param {string} message
- * @param {number} pluralParam
- * @return {string}
- */
 i18n.t = function (message) {
 	var pluralParam = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : null;
 
@@ -122,57 +343,20 @@ i18n.t = function (message) {
 
 		var language = i18n.language();
 
-		/**
-   * Modify string using algorithm to detect plural forms.
-   *
-   * @private
-   * @see http://stackoverflow.com/questions/1353408/messageformat-in-javascript-parameters-in-localized-ui-strings
-   * @param {String|String[]} input   - String or array of strings to pick the plural form
-   * @param {Number} number           - Number to determine the proper plural form
-   * @param {Number} form             - Number of language family to apply plural form
-   * @return {String}
-   */
 		var _plural = function _plural(input, number, form) {
 
 			if ((typeof input === 'undefined' ? 'undefined' : _typeof(input)) !== 'object' || typeof number !== 'number' || typeof form !== 'number') {
 				return input;
 			}
 
-			/**
-    *
-    * @return {Function[]}
-    * @private
-    */
 			var _pluralForms = function () {
-				return [
-				// 0: Chinese, Japanese, Korean, Persian, Turkish, Thai, Lao, Aymará,
-				// Tibetan, Chiga, Dzongkha, Indonesian, Lojban, Georgian, Kazakh, Khmer, Kyrgyz, Malay,
-				// Burmese, Yakut, Sundanese, Tatar, Uyghur, Vietnamese, Wolof
-				function () {
+				return [function () {
 					return arguments.length <= 1 ? undefined : arguments[1];
-				},
-
-				// 1: Danish, Dutch, English, Faroese, Frisian, German, Norwegian, Swedish, Estonian, Finnish,
-				// Hungarian, Basque, Greek, Hebrew, Italian, Portuguese, Spanish, Catalan, Afrikaans,
-				// Angika, Assamese, Asturian, Azerbaijani, Bulgarian, Bengali, Bodo, Aragonese, Dogri,
-				// Esperanto, Argentinean Spanish, Fulah, Friulian, Galician, Gujarati, Hausa,
-				// Hindi, Chhattisgarhi, Armenian, Interlingua, Greenlandic, Kannada, Kurdish, Letzeburgesch,
-				// Maithili, Malayalam, Mongolian, Manipuri, Marathi, Nahuatl, Neapolitan, Norwegian Bokmal,
-				// Nepali, Norwegian Nynorsk, Norwegian (old code), Northern Sotho, Oriya, Punjabi, Papiamento,
-				// Piemontese, Pashto, Romansh, Kinyarwanda, Santali, Scots, Sindhi, Northern Sami, Sinhala,
-				// Somali, Songhay, Albanian, Swahili, Tamil, Telugu, Turkmen, Urdu, Yoruba
-				function () {
+				}, function () {
 					return (arguments.length <= 0 ? undefined : arguments[0]) === 1 ? arguments.length <= 1 ? undefined : arguments[1] : arguments.length <= 2 ? undefined : arguments[2];
-				},
-
-				// 2: French, Brazilian Portuguese, Acholi, Akan, Amharic, Mapudungun, Breton, Filipino,
-				// Gun, Lingala, Mauritian Creole, Malagasy, Maori, Occitan, Tajik, Tigrinya, Uzbek, Walloon
-				function () {
+				}, function () {
 					return (arguments.length <= 0 ? undefined : arguments[0]) === 0 || (arguments.length <= 0 ? undefined : arguments[0]) === 1 ? arguments.length <= 1 ? undefined : arguments[1] : arguments.length <= 2 ? undefined : arguments[2];
-				},
-
-				// 3: Latvian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 === 1 && (arguments.length <= 0 ? undefined : arguments[0]) % 100 !== 11) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) !== 0) {
@@ -180,10 +364,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 4: Scottish Gaelic
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1 || (arguments.length <= 0 ? undefined : arguments[0]) === 11) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 2 || (arguments.length <= 0 ? undefined : arguments[0]) === 12) {
@@ -193,10 +374,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 4 ? undefined : arguments[4];
 					}
-				},
-
-				// 5:  Romanian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 0 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 > 0 && (arguments.length <= 0 ? undefined : arguments[0]) % 100 < 20) {
@@ -204,10 +382,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 6: Lithuanian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 === 1 && (arguments.length <= 0 ? undefined : arguments[0]) % 100 !== 11) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 >= 2 && ((arguments.length <= 0 ? undefined : arguments[0]) % 100 < 10 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 >= 20)) {
@@ -215,10 +390,7 @@ i18n.t = function (message) {
 					} else {
 						return [3];
 					}
-				},
-
-				// 7: Belarusian, Bosnian, Croatian, Serbian, Russian, Ukrainian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 === 1 && (arguments.length <= 0 ? undefined : arguments[0]) % 100 !== 11) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 >= 2 && (arguments.length <= 0 ? undefined : arguments[0]) % 10 <= 4 && ((arguments.length <= 0 ? undefined : arguments[0]) % 100 < 10 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 >= 20)) {
@@ -226,10 +398,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 8:  Slovak, Czech
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) >= 2 && (arguments.length <= 0 ? undefined : arguments[0]) <= 4) {
@@ -237,10 +406,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 9: Polish
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 >= 2 && (arguments.length <= 0 ? undefined : arguments[0]) % 10 <= 4 && ((arguments.length <= 0 ? undefined : arguments[0]) % 100 < 10 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 >= 20)) {
@@ -248,10 +414,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 10: Slovenian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) % 100 === 1) {
 						return arguments.length <= 2 ? undefined : arguments[2];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 100 === 2) {
@@ -261,10 +424,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					}
-				},
-
-				// 11: Irish Gaelic
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 2) {
@@ -276,10 +436,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 5 ? undefined : arguments[5];
 					}
-				},
-
-				// 12: Arabic
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 0) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
@@ -293,10 +450,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 6 ? undefined : arguments[6];
 					}
-				},
-
-				// 13: Maltese
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 0 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 > 1 && (arguments.length <= 0 ? undefined : arguments[0]) % 100 < 11) {
@@ -306,10 +460,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 4 ? undefined : arguments[4];
 					}
-				},
-
-				// 14: Macedonian
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 === 2) {
@@ -317,19 +468,9 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 15:  Icelandic
-				function () {
+				}, function () {
 					return (arguments.length <= 0 ? undefined : arguments[0]) !== 11 && (arguments.length <= 0 ? undefined : arguments[0]) % 10 === 1 ? arguments.length <= 1 ? undefined : arguments[1] : arguments.length <= 2 ? undefined : arguments[2];
-				},
-
-				// New additions
-
-				// 16:  Kashubian
-				// In https://developer.mozilla.org/en-US/docs/Mozilla/Localization/Localization_and_Plurals#List_of__pluralRules
-				// Breton is listed as #16 but in the Localization Guide it belongs to the group 2
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) % 10 >= 2 && (arguments.length <= 0 ? undefined : arguments[0]) % 10 <= 4 && ((arguments.length <= 0 ? undefined : arguments[0]) % 100 < 10 || (arguments.length <= 0 ? undefined : arguments[0]) % 100 >= 20)) {
@@ -337,10 +478,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 3 ? undefined : arguments[3];
 					}
-				},
-
-				// 17:  Welsh
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 2) {
@@ -350,15 +488,9 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 4 ? undefined : arguments[4];
 					}
-				},
-
-				// 18:  Javanese
-				function () {
+				}, function () {
 					return (arguments.length <= 0 ? undefined : arguments[0]) === 0 ? arguments.length <= 1 ? undefined : arguments[1] : arguments.length <= 2 ? undefined : arguments[2];
-				},
-
-				// 19:  Cornish
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 2) {
@@ -368,10 +500,7 @@ i18n.t = function (message) {
 					} else {
 						return arguments.length <= 4 ? undefined : arguments[4];
 					}
-				},
-
-				// 20:  Mandinka
-				function () {
+				}, function () {
 					if ((arguments.length <= 0 ? undefined : arguments[0]) === 0) {
 						return arguments.length <= 1 ? undefined : arguments[1];
 					} else if ((arguments.length <= 0 ? undefined : arguments[0]) === 1) {
@@ -382,11 +511,9 @@ i18n.t = function (message) {
 				}];
 			}();
 
-			// Perform plural form or return original text
 			return _pluralForms[form].apply(null, [number].concat(input));
 		};
 
-		// Fetch the localized version of the string
 		if (i18n[language] !== undefined) {
 			str = i18n[language][message];
 			if (pluralParam !== null && typeof pluralParam === 'number') {
@@ -395,7 +522,6 @@ i18n.t = function (message) {
 			}
 		}
 
-		// Fallback to default language if requested uid is not translated
 		if (!str && i18n.en) {
 			str = i18n.en[message];
 			if (pluralParam !== null && typeof pluralParam === 'number') {
@@ -404,11 +530,8 @@ i18n.t = function (message) {
 			}
 		}
 
-		// As a last resort, use the requested uid, to mimic original behavior of i18n utils
-		// (in which uid was the english text)
 		str = str || message;
 
-		// Replace token
 		if (pluralParam !== null && typeof pluralParam === 'number') {
 			str = str.replace('%1', pluralParam);
 		}
@@ -421,19 +544,20 @@ i18n.t = function (message) {
 
 _mejs2.default.i18n = i18n;
 
-// `i18n` compatibility workflow with WordPress
 if (typeof mejsL10n !== 'undefined') {
 	_mejs2.default.i18n.language(mejsL10n.language, mejsL10n.strings);
 }
 
 exports.default = i18n;
 
-},{"14":14,"24":24,"6":6}],5:[function(_dereq_,module,exports){
+},{"15":15,"27":27,"7":7}],6:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
 	value: true
 });
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 var _window = _dereq_(3);
 
@@ -443,61 +567,47 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _media = _dereq_(25);
+var _general = _dereq_(27);
 
-var _renderer = _dereq_(7);
+var _media2 = _dereq_(28);
+
+var _renderer = _dereq_(8);
+
+var _constants = _dereq_(25);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 
-/**
- * Media Core
- *
- * This class is the foundation to create/render different media formats.
- * @class MediaElement
- */
-var MediaElement = function MediaElement(idOrNode, options) {
+var MediaElement = function MediaElement(idOrNode, options, sources) {
 	var _this = this;
 
 	_classCallCheck(this, MediaElement);
 
 	var t = this;
 
+	sources = Array.isArray(sources) ? sources : null;
+
 	t.defaults = {
-		/**
-   * List of the renderers to use
-   * @type {String[]}
-   */
 		renderers: [],
-		/**
-   * Name of MediaElement container
-   * @type {String}
-   */
+
 		fakeNodeName: 'mediaelementwrapper',
-		/**
-   * The path where shims are located
-   * @type {String}
-   */
+
 		pluginPath: 'build/',
-		/**
-   * Flag in `<object>` and `<embed>` to determine whether to use local or CDN
-   * Possible values: 'always' (CDN version) or 'sameDomain' (local files)
-   */
+
 		shimScriptAccess: 'sameDomain'
 	};
 
 	options = Object.assign(t.defaults, options);
 
-	// create our node (note: older versions of iOS don't support Object.defineProperty on DOM nodes)
 	t.mediaElement = _document2.default.createElement(options.fakeNodeName);
-	t.mediaElement.options = options;
 
-	var id = idOrNode;
+	var id = idOrNode,
+	    error = false;
 
 	if (typeof idOrNode === 'string') {
 		t.mediaElement.originalNode = _document2.default.getElementById(idOrNode);
@@ -506,56 +616,107 @@ var MediaElement = function MediaElement(idOrNode, options) {
 		id = idOrNode.id;
 	}
 
+	if (t.mediaElement.originalNode === undefined || t.mediaElement.originalNode === null) {
+		return null;
+	}
+
+	t.mediaElement.options = options;
 	id = id || 'mejs_' + Math.random().toString().slice(2);
 
-	if (t.mediaElement.originalNode !== undefined && t.mediaElement.originalNode !== null && t.mediaElement.appendChild) {
-		// change id
-		t.mediaElement.originalNode.setAttribute('id', id + '_from_mejs');
+	t.mediaElement.originalNode.setAttribute('id', id + '_from_mejs');
 
-		// to avoid some issues with Javascript interactions in the plugin, set `preload=none` if not set
-		// only if video/audio tags are detected
-		var tagName = t.mediaElement.originalNode.tagName.toLowerCase();
-		if (['video', 'audio'].includes(tagName) && !t.mediaElement.originalNode.getAttribute('preload')) {
-			t.mediaElement.originalNode.setAttribute('preload', 'none');
+	var tagName = t.mediaElement.originalNode.tagName.toLowerCase();
+	if (['video', 'audio'].indexOf(tagName) > -1 && !t.mediaElement.originalNode.getAttribute('preload')) {
+		t.mediaElement.originalNode.setAttribute('preload', 'none');
+	}
+
+	t.mediaElement.originalNode.parentNode.insertBefore(t.mediaElement, t.mediaElement.originalNode);
+
+	t.mediaElement.appendChild(t.mediaElement.originalNode);
+
+	var processURL = function processURL(url, type) {
+		if (_window2.default.location.protocol === 'https:' && url.indexOf('http:') === 0 && _constants.IS_IOS && _mejs2.default.html5media.mediaTypes.indexOf(type) > -1) {
+			var xhr = new XMLHttpRequest();
+			xhr.onreadystatechange = function () {
+				if (this.readyState === 4 && this.status === 200) {
+					var _url = _window2.default.URL || _window2.default.webkitURL,
+					    blobUrl = _url.createObjectURL(this.response);
+					t.mediaElement.originalNode.setAttribute('src', blobUrl);
+					return blobUrl;
+				}
+				return url;
+			};
+			xhr.open('GET', url);
+			xhr.responseType = 'blob';
+			xhr.send();
 		}
 
-		// add next to this one
-		t.mediaElement.originalNode.parentNode.insertBefore(t.mediaElement, t.mediaElement.originalNode);
+		return url;
+	};
 
-		// insert this one inside
-		t.mediaElement.appendChild(t.mediaElement.originalNode);
-	} else {
-		// TODO: where to put the node?
+	var mediaFiles = void 0;
+
+	if (sources !== null) {
+		mediaFiles = sources;
+	} else if (t.mediaElement.originalNode !== null) {
+
+		mediaFiles = [];
+
+		switch (t.mediaElement.originalNode.nodeName.toLowerCase()) {
+			case 'iframe':
+				mediaFiles.push({
+					type: '',
+					src: t.mediaElement.originalNode.getAttribute('src')
+				});
+				break;
+			case 'audio':
+			case 'video':
+				var _sources = t.mediaElement.originalNode.children.length,
+				    nodeSource = t.mediaElement.originalNode.getAttribute('src');
+
+				if (nodeSource) {
+					var node = t.mediaElement.originalNode,
+					    type = (0, _media2.formatType)(nodeSource, node.getAttribute('type'));
+					mediaFiles.push({
+						type: type,
+						src: processURL(nodeSource, type)
+					});
+				}
+
+				for (var i = 0; i < _sources; i++) {
+					var n = t.mediaElement.originalNode.children[i];
+					if (n.tagName.toLowerCase() === 'source') {
+						var src = n.getAttribute('src'),
+						    _type = (0, _media2.formatType)(src, n.getAttribute('type'));
+						mediaFiles.push({ type: _type, src: processURL(src, _type) });
+					}
+				}
+				break;
+		}
 	}
 
 	t.mediaElement.id = id;
 	t.mediaElement.renderers = {};
+	t.mediaElement.events = {};
+	t.mediaElement.promises = [];
 	t.mediaElement.renderer = null;
 	t.mediaElement.rendererName = null;
-	/**
-  * Determine whether the renderer was found or not
-  *
-  * @public
-  * @param {String} rendererName
-  * @param {Object[]} mediaFiles
-  * @return {Boolean}
-  */
+
 	t.mediaElement.changeRenderer = function (rendererName, mediaFiles) {
 
-		var t = _this;
+		var t = _this,
+		    media = Object.keys(mediaFiles[0]).length > 2 ? mediaFiles[0] : mediaFiles[0].src;
 
-		// check for a match on the current renderer
 		if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null && t.mediaElement.renderer.name === rendererName) {
 			t.mediaElement.renderer.pause();
 			if (t.mediaElement.renderer.stop) {
 				t.mediaElement.renderer.stop();
 			}
 			t.mediaElement.renderer.show();
-			t.mediaElement.renderer.setSrc(mediaFiles[0].src);
+			t.mediaElement.renderer.setSrc(media);
 			return true;
 		}
 
-		// if existing renderer is not the right one, then hide it
 		if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null) {
 			t.mediaElement.renderer.pause();
 			if (t.mediaElement.renderer.stop) {
@@ -564,13 +725,12 @@ var MediaElement = function MediaElement(idOrNode, options) {
 			t.mediaElement.renderer.hide();
 		}
 
-		// see if we have the renderer already created
 		var newRenderer = t.mediaElement.renderers[rendererName],
 		    newRendererType = null;
 
 		if (newRenderer !== undefined && newRenderer !== null) {
 			newRenderer.show();
-			newRenderer.setSrc(mediaFiles[0].src);
+			newRenderer.setSrc(media);
 			t.mediaElement.renderer = newRenderer;
 			t.mediaElement.rendererName = rendererName;
 			return true;
@@ -578,14 +738,10 @@ var MediaElement = function MediaElement(idOrNode, options) {
 
 		var rendererArray = t.mediaElement.options.renderers.length ? t.mediaElement.options.renderers : _renderer.renderer.order;
 
-		// find the desired renderer in the array of possible ones
-		for (var i = 0, total = rendererArray.length; i < total; i++) {
-
-			var index = rendererArray[i];
+		for (var _i = 0, total = rendererArray.length; _i < total; _i++) {
+			var index = rendererArray[_i];
 
 			if (index === rendererName) {
-
-				// create the renderer
 				var rendererList = _renderer.renderer.renderers;
 				newRendererType = rendererList[index];
 
@@ -593,13 +749,10 @@ var MediaElement = function MediaElement(idOrNode, options) {
 				newRenderer = newRendererType.create(t.mediaElement, renderOptions, mediaFiles);
 				newRenderer.name = rendererName;
 
-				// store for later
 				t.mediaElement.renderers[newRendererType.name] = newRenderer;
 				t.mediaElement.renderer = newRenderer;
 				t.mediaElement.rendererName = rendererName;
-
 				newRenderer.show();
-
 				return true;
 			}
 		}
@@ -607,24 +760,25 @@ var MediaElement = function MediaElement(idOrNode, options) {
 		return false;
 	};
 
-	/**
-  * Set the element dimensions based on selected renderer's setSize method
-  *
-  * @public
-  * @param {number} width
-  * @param {number} height
-  */
 	t.mediaElement.setSize = function (width, height) {
 		if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null) {
 			t.mediaElement.renderer.setSize(width, height);
 		}
 	};
 
+	t.mediaElement.generateError = function (message, urlList) {
+		message = message || '';
+		urlList = Array.isArray(urlList) ? urlList : [];
+		var event = (0, _general.createEvent)('error', t.mediaElement);
+		event.message = message;
+		event.urls = urlList;
+		t.mediaElement.dispatchEvent(event);
+		error = true;
+	};
+
 	var props = _mejs2.default.html5media.properties,
 	    methods = _mejs2.default.html5media.methods,
 	    addProperty = function addProperty(obj, name, onGet, onSet) {
-
-		// wrapper functions
 		var oldValue = obj[name];
 		var getFn = function getFn() {
 			return onGet.apply(obj, [oldValue]);
@@ -641,223 +795,214 @@ var MediaElement = function MediaElement(idOrNode, options) {
 	},
 	    assignGettersSetters = function assignGettersSetters(propName) {
 		if (propName !== 'src') {
-			(function () {
 
-				var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1),
-				    getFn = function getFn() {
-					return t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null ? t.mediaElement.renderer['get' + capName]() : null;
-				},
-				    setFn = function setFn(value) {
-					if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null) {
-						t.mediaElement.renderer['set' + capName](value);
-					}
-				};
+			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1),
+			    getFn = function getFn() {
+				return t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null && typeof t.mediaElement.renderer['get' + capName] === 'function' ? t.mediaElement.renderer['get' + capName]() : null;
+			},
+			    setFn = function setFn(value) {
+				if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null && typeof t.mediaElement.renderer['set' + capName] === 'function') {
+					t.mediaElement.renderer['set' + capName](value);
+				}
+			};
 
-				addProperty(t.mediaElement, propName, getFn, setFn);
-				t.mediaElement['get' + capName] = getFn;
-				t.mediaElement['set' + capName] = setFn;
-			})();
+			addProperty(t.mediaElement, propName, getFn, setFn);
+			t.mediaElement['get' + capName] = getFn;
+			t.mediaElement['set' + capName] = setFn;
 		}
 	},
-
-	// `src` is a property separated from the others since it carries the logic to set the proper renderer
-	// based on the media files detected
-	getSrc = function getSrc() {
+	    getSrc = function getSrc() {
 		return t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null ? t.mediaElement.renderer.getSrc() : null;
 	},
 	    setSrc = function setSrc(value) {
-
 		var mediaFiles = [];
 
-		// clean up URLs
 		if (typeof value === 'string') {
 			mediaFiles.push({
 				src: value,
-				type: value ? (0, _media.getTypeFromFile)(value) : ''
+				type: value ? (0, _media2.getTypeFromFile)(value) : ''
 			});
-		} else {
-			for (var i = 0, total = value.length; i < total; i++) {
+		} else if ((typeof value === 'undefined' ? 'undefined' : _typeof(value)) === 'object' && value.src !== undefined) {
+			var _src = (0, _media2.absolutizeUrl)(value.src),
+			    _type2 = value.type,
+			    media = Object.assign(value, {
+				src: _src,
+				type: (_type2 === '' || _type2 === null || _type2 === undefined) && _src ? (0, _media2.getTypeFromFile)(_src) : _type2
+			});
+			mediaFiles.push(media);
+		} else if (Array.isArray(value)) {
+			for (var _i2 = 0, total = value.length; _i2 < total; _i2++) {
 
-				var src = (0, _media.absolutizeUrl)(value[i].src),
-				    type = value[i].type;
-
-				mediaFiles.push({
-					src: src,
-					type: (type === '' || type === null || type === undefined) && src ? (0, _media.getTypeFromFile)(src) : type
+				var _src2 = (0, _media2.absolutizeUrl)(value[_i2].src),
+				    _type3 = value[_i2].type,
+				    _media = Object.assign(value[_i2], {
+					src: _src2,
+					type: (_type3 === '' || _type3 === null || _type3 === undefined) && _src2 ? (0, _media2.getTypeFromFile)(_src2) : _type3
 				});
+
+				mediaFiles.push(_media);
 			}
 		}
 
-		// find a renderer and URL match
 		var renderInfo = _renderer.renderer.select(mediaFiles, t.mediaElement.options.renderers.length ? t.mediaElement.options.renderers : []),
 		    event = void 0;
 
-		// Ensure that the original gets the first source found
-		t.mediaElement.originalNode.setAttribute('src', mediaFiles[0].src || '');
-
-		// did we find a renderer?
-		if (renderInfo === null) {
-			event = _document2.default.createEvent('HTMLEvents');
-			event.initEvent('error', false, false);
-			event.message = 'No renderer found';
+		if (!t.mediaElement.paused) {
+			t.mediaElement.pause();
+			event = (0, _general.createEvent)('pause', t.mediaElement);
 			t.mediaElement.dispatchEvent(event);
+		}
+		t.mediaElement.originalNode.src = mediaFiles[0].src || '';
+
+		if (renderInfo === null && mediaFiles[0].src) {
+			t.mediaElement.generateError('No renderer found', mediaFiles);
 			return;
 		}
 
-		// turn on the renderer (this checks for the existing renderer already)
-		t.mediaElement.changeRenderer(renderInfo.rendererName, mediaFiles);
-
-		if (t.mediaElement.renderer === undefined || t.mediaElement.renderer === null) {
-			event = _document2.default.createEvent('HTMLEvents');
-			event.initEvent('error', false, false);
-			event.message = 'Error creating renderer';
-			t.mediaElement.dispatchEvent(event);
+		return mediaFiles[0].src ? t.mediaElement.changeRenderer(renderInfo.rendererName, mediaFiles) : null;
+	},
+	    triggerAction = function triggerAction(methodName, args) {
+		try {
+			if (methodName === 'play' && t.mediaElement.rendererName === 'native_dash') {
+				var response = t.mediaElement.renderer[methodName](args);
+				if (response && typeof response.then === 'function') {
+					response.catch(function () {
+						if (t.mediaElement.paused) {
+							setTimeout(function () {
+								var tmpResponse = t.mediaElement.renderer.play();
+								if (tmpResponse !== undefined) {
+									tmpResponse.catch(function () {
+										if (!t.mediaElement.renderer.paused) {
+											t.mediaElement.renderer.pause();
+										}
+									});
+								}
+							}, 150);
+						}
+					});
+				}
+			} else {
+				t.mediaElement.renderer[methodName](args);
+			}
+		} catch (e) {
+			t.mediaElement.generateError(e, mediaFiles);
 		}
 	},
 	    assignMethods = function assignMethods(methodName) {
-		// run the method on the current renderer
 		t.mediaElement[methodName] = function () {
 			for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
 				args[_key] = arguments[_key];
 			}
 
-			return t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null && typeof t.mediaElement.renderer[methodName] === 'function' ? t.mediaElement.renderer[methodName](args) : null;
+			if (t.mediaElement.renderer !== undefined && t.mediaElement.renderer !== null && typeof t.mediaElement.renderer[methodName] === 'function') {
+				if (t.mediaElement.promises.length) {
+					Promise.all(t.mediaElement.promises).then(function () {
+						triggerAction(methodName, args);
+					}).catch(function (e) {
+						t.mediaElement.generateError(e, mediaFiles);
+					});
+				} else {
+					triggerAction(methodName, args);
+				}
+			}
+			return null;
 		};
 	};
 
-	// Assign all methods/properties/events to fake node if renderer was found
 	addProperty(t.mediaElement, 'src', getSrc, setSrc);
 	t.mediaElement.getSrc = getSrc;
 	t.mediaElement.setSrc = setSrc;
 
-	for (var i = 0, total = props.length; i < total; i++) {
-		assignGettersSetters(props[i]);
+	for (var _i3 = 0, total = props.length; _i3 < total; _i3++) {
+		assignGettersSetters(props[_i3]);
 	}
 
-	for (var _i = 0, _total = methods.length; _i < _total; _i++) {
-		assignMethods(methods[_i]);
+	for (var _i4 = 0, _total = methods.length; _i4 < _total; _i4++) {
+		assignMethods(methods[_i4]);
 	}
 
-	// IE && iOS
-	t.mediaElement.events = {};
-
-	// start: fake events
 	t.mediaElement.addEventListener = function (eventName, callback) {
-		// create or find the array of callbacks for this eventName
 		t.mediaElement.events[eventName] = t.mediaElement.events[eventName] || [];
 
-		// push the callback into the stack
 		t.mediaElement.events[eventName].push(callback);
 	};
 	t.mediaElement.removeEventListener = function (eventName, callback) {
-		// no eventName means remove all listeners
 		if (!eventName) {
 			t.mediaElement.events = {};
 			return true;
 		}
 
-		// see if we have any callbacks for this eventName
 		var callbacks = t.mediaElement.events[eventName];
 
 		if (!callbacks) {
 			return true;
 		}
 
-		// check for a specific callback
 		if (!callback) {
 			t.mediaElement.events[eventName] = [];
 			return true;
 		}
 
-		// remove the specific callback
-		for (var _i2 = 0; _i2 < callbacks.length; _i2++) {
-			if (callbacks[_i2] === callback) {
-				t.mediaElement.events[eventName].splice(_i2, 1);
+		for (var _i5 = 0; _i5 < callbacks.length; _i5++) {
+			if (callbacks[_i5] === callback) {
+				t.mediaElement.events[eventName].splice(_i5, 1);
 				return true;
 			}
 		}
 		return false;
 	};
 
-	/**
-  *
-  * @param {Event} event
-  */
 	t.mediaElement.dispatchEvent = function (event) {
-
 		var callbacks = t.mediaElement.events[event.type];
-
 		if (callbacks) {
-			for (var _i3 = 0; _i3 < callbacks.length; _i3++) {
-				callbacks[_i3].apply(null, [event]);
+			for (var _i6 = 0; _i6 < callbacks.length; _i6++) {
+				callbacks[_i6].apply(null, [event]);
 			}
 		}
 	};
 
-	if (t.mediaElement.originalNode !== null) {
-		var mediaFiles = [];
+	t.mediaElement.destroy = function () {
+		var mediaElement = t.mediaElement.originalNode.cloneNode(true);
+		var wrapper = t.mediaElement.parentElement;
+		mediaElement.removeAttribute('id');
+		mediaElement.remove();
+		t.mediaElement.remove();
+		wrapper.append(mediaElement);
+	};
 
-		switch (t.mediaElement.originalNode.nodeName.toLowerCase()) {
-
-			case 'iframe':
-				mediaFiles.push({
-					type: '',
-					src: t.mediaElement.originalNode.getAttribute('src')
-				});
-
-				break;
-
-			case 'audio':
-			case 'video':
-				var n = void 0,
-				    src = void 0,
-				    type = void 0,
-				    sources = t.mediaElement.originalNode.childNodes.length,
-				    nodeSource = t.mediaElement.originalNode.getAttribute('src');
-
-				// Consider if node contains the `src` and `type` attributes
-				if (nodeSource) {
-					var node = t.mediaElement.originalNode;
-					mediaFiles.push({
-						type: (0, _media.formatType)(nodeSource, node.getAttribute('type')),
-						src: nodeSource
-					});
-				}
-
-				// test <source> types to see if they are usable
-				for (var _i4 = 0; _i4 < sources; _i4++) {
-					n = t.mediaElement.originalNode.childNodes[_i4];
-					if (n.nodeType === Node.ELEMENT_NODE && n.tagName.toLowerCase() === 'source') {
-						src = n.getAttribute('src');
-						type = (0, _media.formatType)(src, n.getAttribute('type'));
-						mediaFiles.push({ type: type, src: src });
-					}
-				}
-				break;
-		}
-
-		if (mediaFiles.length > 0) {
-			t.mediaElement.src = mediaFiles;
-		}
+	if (mediaFiles.length) {
+		t.mediaElement.src = mediaFiles;
 	}
 
-	if (t.mediaElement.options.success) {
-		t.mediaElement.options.success(t.mediaElement, t.mediaElement.originalNode);
-	}
+	if (t.mediaElement.promises.length) {
+		Promise.all(t.mediaElement.promises).then(function () {
+			if (t.mediaElement.options.success) {
+				t.mediaElement.options.success(t.mediaElement, t.mediaElement.originalNode);
+			}
+		}).catch(function () {
+			if (error && t.mediaElement.options.error) {
+				t.mediaElement.options.error(t.mediaElement, t.mediaElement.originalNode);
+			}
+		});
+	} else {
+		if (t.mediaElement.options.success) {
+			t.mediaElement.options.success(t.mediaElement, t.mediaElement.originalNode);
+		}
 
-	// @todo: Verify if this is needed
-	// if (t.mediaElement.options.error) {
-	// 	t.mediaElement.options.error(this.mediaElement, this.mediaElement.originalNode);
-	// }
+		if (error && t.mediaElement.options.error) {
+			t.mediaElement.options.error(t.mediaElement, t.mediaElement.originalNode);
+		}
+	}
 
 	return t.mediaElement;
 };
 
 _window2.default.MediaElement = MediaElement;
+_mejs2.default.MediaElement = MediaElement;
 
 exports.default = MediaElement;
 
-},{"2":2,"25":25,"3":3,"6":6,"7":7}],6:[function(_dereq_,module,exports){
+},{"2":2,"25":25,"27":27,"28":28,"3":3,"7":7,"8":8}],7:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -870,46 +1015,26 @@ var _window2 = _interopRequireDefault(_window);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-// Namespace
 var mejs = {};
 
-// version number
-mejs.version = '3.2.4';
+mejs.version = '4.2.9';
 
-// Basic HTML5 settings
 mejs.html5media = {
-	/**
-  * @type {String[]}
-  */
-	properties: [
-	// GET/SET
-	'volume', 'src', 'currentTime', 'muted',
-
-	// GET only
-	'duration', 'paused', 'ended', 'buffered', 'error', 'networkState', 'readyState', 'seeking', 'seekable',
-
-	// OTHERS
-	'currentSrc', 'preload', 'bufferedBytes', 'bufferedTime', 'initialTime', 'startOffsetTime', 'defaultPlaybackRate', 'playbackRate', 'played', 'autoplay', 'loop', 'controls'],
+	properties: ['volume', 'src', 'currentTime', 'muted', 'duration', 'paused', 'ended', 'buffered', 'error', 'networkState', 'readyState', 'seeking', 'seekable', 'currentSrc', 'preload', 'bufferedBytes', 'bufferedTime', 'initialTime', 'startOffsetTime', 'defaultPlaybackRate', 'playbackRate', 'played', 'autoplay', 'loop', 'controls'],
 	readOnlyProperties: ['duration', 'paused', 'ended', 'buffered', 'error', 'networkState', 'readyState', 'seeking', 'seekable'],
-	/**
-  * @type {String[]}
-  */
+
 	methods: ['load', 'play', 'pause', 'canPlayType'],
-	/**
-  * @type {String[]}
-  */
-	events: ['loadstart', 'progress', 'suspend', 'abort', 'error', 'emptied', 'stalled', 'play', 'pause', 'loadedmetadata', 'loadeddata', 'waiting', 'playing', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'timeupdate', 'ended', 'ratechange', 'durationchange', 'volumechange'],
-	/**
-  * @type {String[]}
-  */
-	mediaTypes: ['audio/mp3', 'audio/ogg', 'audio/oga', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/x-pn-wav', 'audio/mpeg', 'audio/mp4', 'video/mp4', 'video/webm', 'video/ogg']
+
+	events: ['loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'progress', 'canplay', 'canplaythrough', 'suspend', 'abort', 'error', 'emptied', 'stalled', 'play', 'playing', 'pause', 'waiting', 'seeking', 'seeked', 'timeupdate', 'ended', 'ratechange', 'volumechange'],
+
+	mediaTypes: ['audio/mp3', 'audio/ogg', 'audio/oga', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/x-pn-wav', 'audio/mpeg', 'audio/mp4', 'video/mp4', 'video/webm', 'video/ogg', 'video/ogv']
 };
 
 _window2.default.mejs = mejs;
 
 exports.default = mejs;
 
-},{"3":3}],7:[function(_dereq_,module,exports){
+},{"3":3}],8:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -921,7 +1046,7 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
 
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
@@ -929,11 +1054,6 @@ function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { de
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 
-/**
- *
- * Class to manage renderer selection and addition.
- * @class Renderer
- */
 var Renderer = function () {
 	function Renderer() {
 		_classCallCheck(this, Renderer);
@@ -942,18 +1062,9 @@ var Renderer = function () {
 		this.order = [];
 	}
 
-	/**
-  * Register a new renderer.
-  *
-  * @param {Object} renderer - An object with all the rendered information (name REQUIRED)
-  * @method add
-  */
-
-
 	_createClass(Renderer, [{
 		key: 'add',
 		value: function add(renderer) {
-
 			if (renderer.name === undefined) {
 				throw new TypeError('renderer must contain at least `name` property');
 			}
@@ -961,46 +1072,29 @@ var Renderer = function () {
 			this.renderers[renderer.name] = renderer;
 			this.order.push(renderer.name);
 		}
-
-		/**
-   * Iterate a list of renderers to determine which one should the player use.
-   *
-   * @param {Object[]} mediaFiles - A list of source and type obtained from video/audio/source tags: [{src:'',type:''}]
-   * @param {?String[]} renderers - Optional list of pre-selected renderers
-   * @return {?Object} The renderer's name and source selected
-   * @method select
-   */
-
 	}, {
 		key: 'select',
 		value: function select(mediaFiles) {
 			var renderers = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : [];
 
-
 			var renderersLength = renderers.length;
 
 			renderers = renderers.length ? renderers : this.order;
 
-			// If renderers are not set, set a default order:
-			// 1) Native renderers (HTML5, HLS, M(PEG)-DASH, FLV)
-			// 2) Flash shims (RTMP, FLV, HLS, M(PEG)-DASH, MP3, OGG)
-			// 3) Iframe renderers (YouTube, SoundCloud, Facebook. etc.)
 			if (!renderersLength) {
-				(function () {
-					var rendererIndicator = [/^(html5|native)/, /^flash/, /iframe$/],
-					    rendererRanking = function rendererRanking(renderer) {
-						for (var i = 0, total = rendererIndicator.length; i < total; i++) {
-							if (renderer.match(rendererIndicator[i]) !== null) {
-								return i;
-							}
+				var rendererIndicator = [/^(html5|native)/i, /^flash/i, /iframe$/i],
+				    rendererRanking = function rendererRanking(renderer) {
+					for (var i = 0, total = rendererIndicator.length; i < total; i++) {
+						if (rendererIndicator[i].test(renderer)) {
+							return i;
 						}
-						return rendererIndicator.length;
-					};
+					}
+					return rendererIndicator.length;
+				};
 
-					renderers.sort(function (a, b) {
-						return rendererRanking(a) - rendererRanking(b);
-					});
-				})();
+				renderers.sort(function (a, b) {
+					return rendererRanking(a) - rendererRanking(b);
+				});
 			}
 
 			for (var i = 0, total = renderers.length; i < total; i++) {
@@ -1021,13 +1115,9 @@ var Renderer = function () {
 
 			return null;
 		}
-
-		// Setters/getters
-
 	}, {
 		key: 'order',
 		set: function set(order) {
-
 			if (!Array.isArray(order)) {
 				throw new TypeError('order must be an array of strings.');
 			}
@@ -1040,7 +1130,6 @@ var Renderer = function () {
 	}, {
 		key: 'renderers',
 		set: function set(renderers) {
-
 			if (renderers !== null && (typeof renderers === 'undefined' ? 'undefined' : _typeof(renderers)) !== 'object') {
 				throw new TypeError('renderers must be an array of objects.');
 			}
@@ -1059,7 +1148,7 @@ var renderer = exports.renderer = new Renderer();
 
 _mejs2.default.Renderers = renderer;
 
-},{"6":6}],8:[function(_dereq_,module,exports){
+},{"7":7}],9:[function(_dereq_,module,exports){
 'use strict';
 
 var _window = _dereq_(3);
@@ -1070,7 +1159,7 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
@@ -1078,103 +1167,59 @@ var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
 var Features = _interopRequireWildcard(_constants);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
+
+var _dom = _dereq_(26);
+
+var _media = _dereq_(28);
 
 function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Fullscreen button
- *
- * This feature creates a button to toggle fullscreen on video; it considers a letiety of possibilities when dealing with it
- * since it is not consistent across browsers. It also accounts for triggering the event through Flash shim.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * @type {Boolean}
-  */
 	usePluginFullScreen: true,
-	/**
-  * @type {?String}
-  */
-	fullscreenText: null
+
+	fullscreenText: null,
+
+	useFakeFullscreen: false
 });
 
 Object.assign(_player2.default.prototype, {
-
-	/**
-  * @type {Boolean}
-  */
 	isFullScreen: false,
-	/**
-  * @type {Boolean}
-  */
+
 	isNativeFullScreen: false,
-	/**
-  * @type {Boolean}
-  */
+
 	isInIframe: false,
-	/**
-  * @type {Boolean}
-  */
+
 	isPluginClickThroughCreated: false,
-	/**
-  * Possible modes
-  * (1) 'native-native'  HTML5 video  + browser fullscreen (IE10+, etc.)
-  * (2) 'plugin-native'  plugin video + browser fullscreen (fails in some versions of Firefox)
-  * (3) 'fullwindow'     Full window (retains all UI)
-  * (4) 'plugin-click'   Flash 1 - click through with pointer events
-  * (5) 'plugin-hover'   Flash 2 - hover popup in flash (IE6-8)
-  *
-  * @type {String}
-  */
+
 	fullscreenMode: '',
-	/**
-  *
-  */
+
 	containerSizeTimeout: null,
 
-	/**
-  * Feature constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  */
-	buildfullscreen: function buildfullscreen(player, controls, layers, media) {
-
+	buildfullscreen: function buildfullscreen(player) {
 		if (!player.isVideo) {
 			return;
 		}
 
 		player.isInIframe = _window2.default.location !== _window2.default.parent.location;
 
-		// detect on start
-		media.addEventListener('loadstart', function () {
-			player.detectFullscreenMode();
-		});
+		player.detectFullscreenMode();
 
-		var hideTimeout = null;
-
-		// build button
 		var t = this,
 		    fullscreenTitle = (0, _general.isString)(t.options.fullscreenText) ? t.options.fullscreenText : _i18n2.default.t('mejs.fullscreen'),
-		    fullscreenBtn = $('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'fullscreen-button">' + ('<button type="button" aria-controls="' + t.id + '" title="' + fullscreenTitle + '" aria-label="' + fullscreenTitle + '" tabindex="0"></button>') + '</div>');
+		    fullscreenBtn = _document2.default.createElement('div');
 
+		fullscreenBtn.className = t.options.classPrefix + 'button ' + t.options.classPrefix + 'fullscreen-button';
+		fullscreenBtn.innerHTML = '<button type="button" aria-controls="' + t.id + '" title="' + fullscreenTitle + '" aria-label="' + fullscreenTitle + '" tabindex="0"></button>';
 		t.addControlElement(fullscreenBtn, 'fullscreen');
 
-		fullscreenBtn.on('click', function () {
-
-			// toggle fullscreen
+		fullscreenBtn.addEventListener('click', function () {
 			var isFullScreen = Features.HAS_TRUE_NATIVE_FULLSCREEN && Features.IS_FULLSCREEN || player.isFullScreen;
 
 			if (isFullScreen) {
@@ -1182,65 +1227,47 @@ Object.assign(_player2.default.prototype, {
 			} else {
 				player.enterFullScreen();
 			}
-		}).on('mouseover', function () {
-
-			// very old browsers with a plugin
-			if (t.fullscreenMode === 'plugin-hover') {
-				if (hideTimeout !== null) {
-					clearTimeout(hideTimeout);
-					hideTimeout = null;
-				}
-
-				var buttonPos = fullscreenBtn.offset(),
-				    containerPos = player.container.offset();
-
-				media.positionFullscreenButton(buttonPos.left - containerPos.left, buttonPos.top - containerPos.top, true);
-			}
-		}).on('mouseout', function () {
-
-			if (t.fullscreenMode === 'plugin-hover') {
-				if (hideTimeout !== null) {
-					clearTimeout(hideTimeout);
-				}
-
-				hideTimeout = setTimeout(function () {
-					media.hideFullscreenButton();
-				}, 1500);
-			}
 		});
 
 		player.fullscreenBtn = fullscreenBtn;
 
-		t.globalBind('keydown', function (e) {
-			var key = e.which || e.keyCode || 0;
-			if (key === 27 && (Features.HAS_TRUE_NATIVE_FULLSCREEN && Features.IS_FULLSCREEN || t.isFullScreen)) {
-				player.exitFullScreen();
+		t.options.keyActions.push({
+			keys: [70],
+			action: function action(player, media, key, event) {
+				if (!event.ctrlKey) {
+					if (typeof player.enterFullScreen !== 'undefined') {
+						if (player.isFullScreen) {
+							player.exitFullScreen();
+						} else {
+							player.enterFullScreen();
+						}
+					}
+				}
 			}
 		});
+
+		t.exitFullscreenCallback = function (e) {
+			var key = e.which || e.keyCode || 0;
+			if (t.options.enableKeyboard && key === 27 && (Features.HAS_TRUE_NATIVE_FULLSCREEN && Features.IS_FULLSCREEN || t.isFullScreen)) {
+				player.exitFullScreen();
+			}
+		};
+
+		t.globalBind('keydown', t.exitFullscreenCallback);
 
 		t.normalHeight = 0;
 		t.normalWidth = 0;
 
-		// setup native fullscreen event
 		if (Features.HAS_TRUE_NATIVE_FULLSCREEN) {
-
-			//
-			/**
-    * Detect any changes on fullscreen
-    *
-    * Chrome doesn't always fire this in an `<iframe>`
-    * @private
-    */
 			var fullscreenChanged = function fullscreenChanged() {
 				if (player.isFullScreen) {
 					if (Features.isFullScreen()) {
 						player.isNativeFullScreen = true;
-						// reset the controls once we are fully in full screen
+
 						player.setControlsSize();
 					} else {
 						player.isNativeFullScreen = false;
-						// when a user presses ESC
-						// make sure to put the player back into place
+
 						player.exitFullScreen();
 					}
 				}
@@ -1249,16 +1276,13 @@ Object.assign(_player2.default.prototype, {
 			player.globalBind(Features.FULLSCREEN_EVENT_NAME, fullscreenChanged);
 		}
 	},
-
-	/**
-  * Detect the type of fullscreen based on browser's capabilities
-  *
-  * @return {String}
-  */
+	cleanfullscreen: function cleanfullscreen(player) {
+		player.exitFullScreen();
+		player.globalUnbind('keydown', player.exitFullscreenCallback);
+	},
 	detectFullscreenMode: function detectFullscreenMode() {
-
 		var t = this,
-		    isNative = t.media.rendererName !== null && t.media.rendererName.match(/(native|html5)/) !== null;
+		    isNative = t.media.rendererName !== null && /(native|html5)/i.test(t.media.rendererName);
 
 		var mode = '';
 
@@ -1266,466 +1290,295 @@ Object.assign(_player2.default.prototype, {
 			mode = 'native-native';
 		} else if (Features.HAS_TRUE_NATIVE_FULLSCREEN && !isNative) {
 			mode = 'plugin-native';
-		} else if (t.usePluginFullScreen) {
-			if (Features.SUPPORT_POINTER_EVENTS) {
-				mode = 'plugin-click';
-				// this needs some special setup
-				t.createPluginClickThrough();
-			} else {
-				mode = 'plugin-hover';
-			}
-		} else {
-			mode = 'fullwindow';
+		} else if (t.usePluginFullScreen && Features.SUPPORT_POINTER_EVENTS) {
+			mode = 'plugin-click';
 		}
 
 		t.fullscreenMode = mode;
 		return mode;
 	},
-
-	/**
-  *
-  */
-	createPluginClickThrough: function createPluginClickThrough() {
-
-		var t = this;
-
-		// don't build twice
-		if (t.isPluginClickThroughCreated) {
-			return;
-		}
-
-		// allows clicking through the fullscreen button and controls down directly to Flash
-
-		/*
-   When a user puts his mouse over the fullscreen button, we disable the controls so that mouse events can go down to flash (pointer-events)
-   We then put a divs over the video and on either side of the fullscreen button
-   to capture mouse movement and restore the controls once the mouse moves outside of the fullscreen button
-   */
-
-		var fullscreenIsDisabled = false,
-		    restoreControls = function restoreControls() {
-			if (fullscreenIsDisabled) {
-				// hide the hovers
-				for (var i in hoverDivs) {
-					hoverDivs[i].hide();
-				}
-
-				// restore the control bar
-				t.fullscreenBtn.css('pointer-events', '');
-				t.controls.css('pointer-events', '');
-
-				// prevent clicks from pausing video
-				t.media.removeEventListener('click', t.clickToPlayPauseCallback);
-
-				// store for later
-				fullscreenIsDisabled = false;
-			}
-		},
-		    hoverDivs = {},
-		    hoverDivNames = ['top', 'left', 'right', 'bottom'],
-		    positionHoverDivs = function positionHoverDivs() {
-			var fullScreenBtnOffsetLeft = t.fullscreenBtn.offset().left - t.container.offset().left,
-			    fullScreenBtnOffsetTop = t.fullscreenBtn.offset().top - t.container.offset().top,
-			    fullScreenBtnWidth = t.fullscreenBtn.outerWidth(true),
-			    fullScreenBtnHeight = t.fullscreenBtn.outerHeight(true),
-			    containerWidth = t.container.width(),
-			    containerHeight = t.container.height();
-
-			for (var hover in hoverDivs) {
-				hover.css({ position: 'absolute', top: 0, left: 0 }); //, backgroundColor: '#f00'});
-			}
-
-			// over video, but not controls
-			hoverDivs.top.width(containerWidth).height(fullScreenBtnOffsetTop);
-
-			// over controls, but not the fullscreen button
-			hoverDivs.left.width(fullScreenBtnOffsetLeft).height(fullScreenBtnHeight).css({ top: fullScreenBtnOffsetTop });
-
-			// after the fullscreen button
-			hoverDivs.right.width(containerWidth - fullScreenBtnOffsetLeft - fullScreenBtnWidth).height(fullScreenBtnHeight).css({
-				top: fullScreenBtnOffsetTop,
-				left: fullScreenBtnOffsetLeft + fullScreenBtnWidth
-			});
-
-			// under the fullscreen button
-			hoverDivs.bottom.width(containerWidth).height(containerHeight - fullScreenBtnHeight - fullScreenBtnOffsetTop).css({ top: fullScreenBtnOffsetTop + fullScreenBtnHeight });
-		};
-
-		t.globalBind('resize', function () {
-			positionHoverDivs();
-		});
-
-		for (var i = 0, len = hoverDivNames.length; i < len; i++) {
-			hoverDivs[hoverDivNames[i]] = $('<div class="' + t.options.classPrefix + 'fullscreen-hover" />').appendTo(t.container).mouseover(restoreControls).hide();
-		}
-
-		// on hover, kill the fullscreen button's HTML handling, allowing clicks down to Flash
-		t.fullscreenBtn.on('mouseover', function () {
-
-			if (!t.isFullScreen) {
-
-				var buttonPos = t.fullscreenBtn.offset(),
-				    containerPos = t.container.offset();
-
-				// move the button in Flash into place
-				t.media.positionFullscreenButton(buttonPos.left - containerPos.left, buttonPos.top - containerPos.top, false);
-
-				// allows click through
-				t.fullscreenBtn.css('pointer-events', 'none');
-				t.controls.css('pointer-events', 'none');
-
-				// restore click-to-play
-				t.media.addEventListener('click', t.clickToPlayPauseCallback);
-
-				// show the divs that will restore things
-				for (var _i = 0, total = hoverDivs.length; _i < total; _i++) {
-					hoverDivs[_i].show();
-				}
-
-				positionHoverDivs();
-
-				fullscreenIsDisabled = true;
-			}
-		});
-
-		// restore controls anytime the user enters or leaves fullscreen
-		t.media.addEventListener('fullscreenchange', function () {
-			t.isFullScreen = !t.isFullScreen;
-			// don't allow plugin click to pause video - messes with
-			// plugin's controls
-			if (t.isFullScreen) {
-				t.media.removeEventListener('click', t.clickToPlayPauseCallback);
-			} else {
-				t.media.addEventListener('click', t.clickToPlayPauseCallback);
-			}
-			restoreControls();
-		});
-
-		// the mouseout event doesn't work on the fullscren button, because we already killed the pointer-events
-		// so we use the document.mousemove event to restore controls when the mouse moves outside the fullscreen button
-
-		t.globalBind('mousemove', function (e) {
-
-			// if the mouse is anywhere but the fullsceen button, then restore it all
-			if (fullscreenIsDisabled) {
-
-				var fullscreenBtnPos = t.fullscreenBtn.offset();
-
-				if (e.pageY < fullscreenBtnPos.top || e.pageY > fullscreenBtnPos.top + t.fullscreenBtn.outerHeight(true) || e.pageX < fullscreenBtnPos.left || e.pageX > fullscreenBtnPos.left + t.fullscreenBtn.outerWidth(true)) {
-					t.fullscreenBtn.css('pointer-events', '');
-					t.controls.css('pointer-events', '');
-					fullscreenIsDisabled = false;
-				}
-			}
-		});
-
-		t.isPluginClickThroughCreated = true;
-	},
-	/**
-  * Feature destructor.
-  *
-  * Always has to be prefixed with `clean` and the name that was used in features list
-  * @param {MediaElementPlayer} player
-  */
-	cleanfullscreen: function cleanfullscreen(player) {
-		player.exitFullScreen();
-	},
-
-	/**
-  *
-  */
 	enterFullScreen: function enterFullScreen() {
-
 		var t = this,
-		    isNative = t.media.rendererName !== null && t.media.rendererName.match(/(html5|native)/) !== null;
+		    isNative = t.media.rendererName !== null && /(html5|native)/i.test(t.media.rendererName),
+		    containerStyles = getComputedStyle(t.getElement(t.container));
 
-		if (Features.IS_IOS && Features.HAS_IOS_FULLSCREEN && typeof t.media.webkitEnterFullscreen === 'function') {
-			t.media.webkitEnterFullscreen();
+		if (!t.isVideo) {
 			return;
 		}
 
-		// set it to not show scroll bars so 100% will work
-		$(_document2.default.documentElement).addClass(t.options.classPrefix + 'fullscreen');
+		if (t.options.useFakeFullscreen === false && Features.IS_IOS && Features.HAS_IOS_FULLSCREEN && typeof t.media.originalNode.webkitEnterFullscreen === 'function' && t.media.originalNode.canPlayType((0, _media.getTypeFromFile)(t.media.getSrc()))) {
+			t.media.originalNode.webkitEnterFullscreen();
+			return;
+		}
 
-		// store sizing
-		t.normalHeight = t.container.height();
-		t.normalWidth = t.container.width();
+		(0, _dom.addClass)(_document2.default.documentElement, t.options.classPrefix + 'fullscreen');
+		(0, _dom.addClass)(t.getElement(t.container), t.options.classPrefix + 'container-fullscreen');
 
-		// attempt to do true fullscreen
+		t.normalHeight = parseFloat(containerStyles.height);
+		t.normalWidth = parseFloat(containerStyles.width);
+
 		if (t.fullscreenMode === 'native-native' || t.fullscreenMode === 'plugin-native') {
-
-			Features.requestFullScreen(t.container[0]);
+			Features.requestFullScreen(t.getElement(t.container));
 
 			if (t.isInIframe) {
-				// sometimes exiting from fullscreen doesn't work
-				// notably in Chrome <iframe>. Fixed in version 17
 				setTimeout(function checkFullscreen() {
 
 					if (t.isNativeFullScreen) {
 						var percentErrorMargin = 0.002,
-						    // 0.2%
-						windowWidth = $(_window2.default).width(),
+						    windowWidth = _window2.default.innerWidth || _document2.default.documentElement.clientWidth || _document2.default.body.clientWidth,
 						    screenWidth = screen.width,
 						    absDiff = Math.abs(screenWidth - windowWidth),
 						    marginError = screenWidth * percentErrorMargin;
 
-						// check if the video is suddenly not really fullscreen
 						if (absDiff > marginError) {
-							// manually exit
 							t.exitFullScreen();
 						} else {
-							// test again
 							setTimeout(checkFullscreen, 500);
 						}
 					}
 				}, 1000);
 			}
-		} else if (t.fullscreeMode === 'fullwindow') {}
-		// move into position
+		}
 
-		// make full size
-		t.container.addClass(t.options.classPrefix + 'container-fullscreen').width('100%').height('100%');
+		t.getElement(t.container).style.width = '100%';
+		t.getElement(t.container).style.height = '100%';
 
-		// Only needed for safari 5.1 native full screen, can cause display issues elsewhere
-		// Actually, it seems to be needed for IE8, too
 		t.containerSizeTimeout = setTimeout(function () {
-			t.container.css({ width: '100%', height: '100%' });
+			t.getElement(t.container).style.width = '100%';
+			t.getElement(t.container).style.height = '100%';
 			t.setControlsSize();
 		}, 500);
 
 		if (isNative) {
-			t.$media.width('100%').height('100%');
+			t.node.style.width = '100%';
+			t.node.style.height = '100%';
 		} else {
-			t.container.find('iframe, embed, object, video').width('100%').height('100%');
+			var elements = t.getElement(t.container).querySelectorAll('embed, object, video'),
+			    _total = elements.length;
+			for (var i = 0; i < _total; i++) {
+				elements[i].style.width = '100%';
+				elements[i].style.height = '100%';
+			}
 		}
 
 		if (t.options.setDimensions && typeof t.media.setSize === 'function') {
 			t.media.setSize(screen.width, screen.height);
 		}
 
-		t.layers.children('div').width('100%').height('100%');
+		var layers = t.getElement(t.layers).children,
+		    total = layers.length;
+		for (var _i = 0; _i < total; _i++) {
+			layers[_i].style.width = '100%';
+			layers[_i].style.height = '100%';
+		}
 
 		if (t.fullscreenBtn) {
-			t.fullscreenBtn.removeClass(t.options.classPrefix + 'fullscreen').addClass(t.options.classPrefix + 'unfullscreen');
+			(0, _dom.removeClass)(t.fullscreenBtn, t.options.classPrefix + 'fullscreen');
+			(0, _dom.addClass)(t.fullscreenBtn, t.options.classPrefix + 'unfullscreen');
 		}
 
 		t.setControlsSize();
 		t.isFullScreen = true;
 
-		var zoomFactor = Math.min(screen.width / t.width, screen.height / t.height);
-		t.container.find('.' + t.options.classPrefix + 'captions-text').css('font-size', zoomFactor * 100 + '%');
-		t.container.find('.' + t.options.classPrefix + 'captions-text').css('line-height', 'normal');
-		t.container.find('.' + t.options.classPrefix + 'captions-position').css('bottom', '45px');
-
-		t.container.trigger('enteredfullscreen');
+		var zoomFactor = Math.min(screen.width / t.width, screen.height / t.height),
+		    captionText = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'captions-text');
+		if (captionText) {
+			captionText.style.fontSize = zoomFactor * 100 + '%';
+			captionText.style.lineHeight = 'normal';
+			t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'captions-position').style.bottom = (screen.height - t.normalHeight) / 2 - t.getElement(t.controls).offsetHeight / 2 + zoomFactor + 15 + 'px';
+		}
+		var event = (0, _general.createEvent)('enteredfullscreen', t.getElement(t.container));
+		t.getElement(t.container).dispatchEvent(event);
 	},
-
-	/**
-  *
-  */
 	exitFullScreen: function exitFullScreen() {
-
 		var t = this,
-		    isNative = t.media.rendererName !== null && t.media.rendererName.match(/(native|html5)/) !== null;
+		    isNative = t.media.rendererName !== null && /(native|html5)/i.test(t.media.rendererName);
 
-		// Prevent container from attempting to stretch a second time
+		if (!t.isVideo) {
+			return;
+		}
+
 		clearTimeout(t.containerSizeTimeout);
 
-		// come out of native fullscreen
 		if (Features.HAS_TRUE_NATIVE_FULLSCREEN && (Features.IS_FULLSCREEN || t.isFullScreen)) {
 			Features.cancelFullScreen();
 		}
 
-		// restore scroll bars to document
-		$(_document2.default.documentElement).removeClass(t.options.classPrefix + 'fullscreen');
-
-		t.container.removeClass(t.options.classPrefix + 'container-fullscreen');
+		(0, _dom.removeClass)(_document2.default.documentElement, t.options.classPrefix + 'fullscreen');
+		(0, _dom.removeClass)(t.getElement(t.container), t.options.classPrefix + 'container-fullscreen');
 
 		if (t.options.setDimensions) {
-			t.container.width(t.normalWidth).height(t.normalHeight);
+			t.getElement(t.container).style.width = t.normalWidth + 'px';
+			t.getElement(t.container).style.height = t.normalHeight + 'px';
+
 			if (isNative) {
-				t.$media.width(t.normalWidth).height(t.normalHeight);
+				t.node.style.width = t.normalWidth + 'px';
+				t.node.style.height = t.normalHeight + 'px';
 			} else {
-				t.container.find('iframe, embed, object, video').width(t.normalWidth).height(t.normalHeight);
+				var elements = t.getElement(t.container).querySelectorAll('embed, object, video'),
+				    _total2 = elements.length;
+				for (var i = 0; i < _total2; i++) {
+					elements[i].style.width = t.normalWidth + 'px';
+					elements[i].style.height = t.normalHeight + 'px';
+				}
 			}
 
 			if (typeof t.media.setSize === 'function') {
 				t.media.setSize(t.normalWidth, t.normalHeight);
 			}
 
-			t.layers.children('div').width(t.normalWidth).height(t.normalHeight);
+			var layers = t.getElement(t.layers).children,
+			    total = layers.length;
+			for (var _i2 = 0; _i2 < total; _i2++) {
+				layers[_i2].style.width = t.normalWidth + 'px';
+				layers[_i2].style.height = t.normalHeight + 'px';
+			}
 		}
 
-		t.fullscreenBtn.removeClass(t.options.classPrefix + 'unfullscreen').addClass(t.options.classPrefix + 'fullscreen');
+		if (t.fullscreenBtn) {
+			(0, _dom.removeClass)(t.fullscreenBtn, t.options.classPrefix + 'unfullscreen');
+			(0, _dom.addClass)(t.fullscreenBtn, t.options.classPrefix + 'fullscreen');
+		}
 
 		t.setControlsSize();
 		t.isFullScreen = false;
 
-		t.container.find('.' + t.options.classPrefix + 'captions-text').css('font-size', '');
-		t.container.find('.' + t.options.classPrefix + 'captions-text').css('line-height', '');
-		t.container.find('.' + t.options.classPrefix + 'captions-position').css('bottom', '');
-
-		t.container.trigger('exitedfullscreen');
+		var captionText = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'captions-text');
+		if (captionText) {
+			captionText.style.fontSize = '';
+			captionText.style.lineHeight = '';
+			t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'captions-position').style.bottom = '';
+		}
+		var event = (0, _general.createEvent)('exitedfullscreen', t.getElement(t.container));
+		t.getElement(t.container).dispatchEvent(event);
 	}
 });
 
-},{"16":16,"2":2,"23":23,"24":24,"3":3,"4":4}],9:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"25":25,"26":26,"27":27,"28":28,"3":3,"5":5}],10:[function(_dereq_,module,exports){
 'use strict';
+
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
 
 var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Play/Pause button
- *
- * This feature enables the displaying of a Play button in the control bar, and also contains logic to toggle its state
- * between paused and playing.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * @type {?String}
-  */
 	playText: null,
-	/**
-  * @type {?String}
-  */
+
 	pauseText: null
 });
 
 Object.assign(_player2.default.prototype, {
-	/**
-  * Feature constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  * @public
-  */
 	buildplaypause: function buildplaypause(player, controls, layers, media) {
-
 		var t = this,
 		    op = t.options,
 		    playTitle = (0, _general.isString)(op.playText) ? op.playText : _i18n2.default.t('mejs.play'),
 		    pauseTitle = (0, _general.isString)(op.pauseText) ? op.pauseText : _i18n2.default.t('mejs.pause'),
-		    play = $('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'playpause-button ' + (t.options.classPrefix + 'play">') + ('<button type="button" aria-controls="' + t.id + '" title="' + playTitle + '" aria-label="' + pauseTitle + '" tabindex="0"></button>') + '</div>'),
-		    playBtn = play.find('button');
+		    play = _document2.default.createElement('div');
 
-		t.addControlElement(play, 'playpause');
-
-		play.click(function () {
-			if (media.paused) {
-				media.play();
+		play.className = t.options.classPrefix + 'button ' + t.options.classPrefix + 'playpause-button ' + t.options.classPrefix + 'play';
+		play.innerHTML = '<button type="button" aria-controls="' + t.id + '" title="' + playTitle + '" aria-label="' + pauseTitle + '" tabindex="0"></button>';
+		play.addEventListener('click', function () {
+			if (t.paused) {
+				t.play();
 			} else {
-				media.pause();
+				t.pause();
 			}
 		});
 
-		/**
-   * @private
-   * @param {String} which - token to determine new state of button
-   */
+		var playBtn = play.querySelector('button');
+		t.addControlElement(play, 'playpause');
+
 		function togglePlayPause(which) {
 			if ('play' === which) {
-				play.removeClass(t.options.classPrefix + 'play').removeClass(t.options.classPrefix + 'replay').addClass(t.options.classPrefix + 'pause');
-				playBtn.attr({
-					'title': pauseTitle,
-					'aria-label': pauseTitle
-				});
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'play');
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'replay');
+				(0, _dom.addClass)(play, t.options.classPrefix + 'pause');
+				playBtn.setAttribute('title', pauseTitle);
+				playBtn.setAttribute('aria-label', pauseTitle);
 			} else {
-				play.removeClass(t.options.classPrefix + 'pause').removeClass(t.options.classPrefix + 'replay').addClass(t.options.classPrefix + 'play');
-				playBtn.attr({
-					'title': playTitle,
-					'aria-label': playTitle
-				});
+
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'pause');
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'replay');
+				(0, _dom.addClass)(play, t.options.classPrefix + 'play');
+				playBtn.setAttribute('title', playTitle);
+				playBtn.setAttribute('aria-label', playTitle);
 			}
 		}
 
 		togglePlayPause('pse');
 
+		media.addEventListener('loadedmetadata', function () {
+			if (media.rendererName.indexOf('flash') === -1) {
+				togglePlayPause('pse');
+			}
+		});
 		media.addEventListener('play', function () {
 			togglePlayPause('play');
-		}, false);
+		});
 		media.addEventListener('playing', function () {
 			togglePlayPause('play');
-		}, false);
-
+		});
 		media.addEventListener('pause', function () {
 			togglePlayPause('pse');
-		}, false);
-		media.addEventListener('paused', function () {
-			togglePlayPause('pse');
-		}, false);
-
+		});
 		media.addEventListener('ended', function () {
-
 			if (!player.options.loop) {
-				play.removeClass(t.options.classPrefix + 'pause').removeClass(t.options.classPrefix + 'play').addClass(t.options.classPrefix + 'replay');
-
-				playBtn.attr({
-					'title': playTitle,
-					'aria-label': playTitle
-				});
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'pause');
+				(0, _dom.removeClass)(play, t.options.classPrefix + 'play');
+				(0, _dom.addClass)(play, t.options.classPrefix + 'replay');
+				playBtn.setAttribute('title', playTitle);
+				playBtn.setAttribute('aria-label', playTitle);
 			}
-		}, false);
+		});
 	}
 });
 
-},{"16":16,"24":24,"4":4}],10:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"26":26,"27":27,"5":5}],11:[function(_dereq_,module,exports){
 'use strict';
+
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
 
 var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _time = _dereq_(27);
+var _time = _dereq_(30);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Progress/loaded bar
- *
- * This feature creates a progress bar with a slider in the control bar, and updates it based on native events.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * Enable tooltip that shows time in progress bar
-  * @type {Boolean}
-  */
-	enableProgressTooltip: true
+	enableProgressTooltip: true,
+
+	useSmoothHover: true,
+
+	forceLive: false
 });
 
 Object.assign(_player2.default.prototype, {
-
-	/**
-  * Feature constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  */
 	buildprogress: function buildprogress(player, controls, layers, media) {
 
 		var lastKeyPressTime = 0,
@@ -1734,186 +1587,281 @@ Object.assign(_player2.default.prototype, {
 
 		var t = this,
 		    autoRewindInitial = player.options.autoRewind,
-		    tooltip = player.options.enableProgressTooltip ? '<span class="' + t.options.classPrefix + 'time-float">' + ('<span class="' + t.options.classPrefix + 'time-float-current">00:00</span>') + ('<span class="' + t.options.classPrefix + 'time-float-corner"></span>') + '</span>' : "",
-		    rail = $('<div class="' + t.options.classPrefix + 'time-rail">' + ('<span class="' + t.options.classPrefix + 'time-total ' + t.options.classPrefix + 'time-slider">') + ('<span class="' + t.options.classPrefix + 'time-buffering"></span>') + ('<span class="' + t.options.classPrefix + 'time-loaded"></span>') + ('<span class="' + t.options.classPrefix + 'time-current"></span>') + ('<span class="' + t.options.classPrefix + 'time-handle"></span>') + ('' + tooltip) + '</span>' + '</div>');
+		    tooltip = player.options.enableProgressTooltip ? '<span class="' + t.options.classPrefix + 'time-float">' + ('<span class="' + t.options.classPrefix + 'time-float-current">00:00</span>') + ('<span class="' + t.options.classPrefix + 'time-float-corner"></span>') + '</span>' : '',
+		    rail = _document2.default.createElement('div');
+
+		rail.className = t.options.classPrefix + 'time-rail';
+		rail.innerHTML = '<span class="' + t.options.classPrefix + 'time-total ' + t.options.classPrefix + 'time-slider">' + ('<span class="' + t.options.classPrefix + 'time-buffering"></span>') + ('<span class="' + t.options.classPrefix + 'time-loaded"></span>') + ('<span class="' + t.options.classPrefix + 'time-current"></span>') + ('<span class="' + t.options.classPrefix + 'time-hovered no-hover"></span>') + ('<span class="' + t.options.classPrefix + 'time-handle"><span class="' + t.options.classPrefix + 'time-handle-content"></span></span>') + ('' + tooltip) + '</span>';
 
 		t.addControlElement(rail, 'progress');
 
-		controls.find('.' + t.options.classPrefix + 'time-buffering').hide();
+		t.options.keyActions.push({
+			keys: [37, 227],
+			action: function action(player) {
+				if (!isNaN(player.duration) && player.duration > 0) {
+					if (player.isVideo) {
+						player.showControls();
+						player.startControlsTimer();
+					}
 
-		t.rail = controls.find('.' + t.options.classPrefix + 'time-rail');
-		t.total = controls.find('.' + t.options.classPrefix + 'time-total');
-		t.loaded = controls.find('.' + t.options.classPrefix + 'time-loaded');
-		t.current = controls.find('.' + t.options.classPrefix + 'time-current');
-		t.handle = controls.find('.' + t.options.classPrefix + 'time-handle');
-		t.timefloat = controls.find('.' + t.options.classPrefix + 'time-float');
-		t.timefloatcurrent = controls.find('.' + t.options.classPrefix + 'time-float-current');
-		t.slider = controls.find('.' + t.options.classPrefix + 'time-slider');
+					player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'time-total').focus();
+
+					var newTime = Math.max(player.currentTime - player.options.defaultSeekBackwardInterval(player), 0);
+					player.setCurrentTime(newTime);
+				}
+			}
+		}, {
+			keys: [39, 228],
+			action: function action(player) {
+
+				if (!isNaN(player.duration) && player.duration > 0) {
+					if (player.isVideo) {
+						player.showControls();
+						player.startControlsTimer();
+					}
+
+					player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'time-total').focus();
+
+					var newTime = Math.min(player.currentTime + player.options.defaultSeekForwardInterval(player), player.duration);
+					player.setCurrentTime(newTime);
+				}
+			}
+		});
+
+		t.rail = controls.querySelector('.' + t.options.classPrefix + 'time-rail');
+		t.total = controls.querySelector('.' + t.options.classPrefix + 'time-total');
+		t.loaded = controls.querySelector('.' + t.options.classPrefix + 'time-loaded');
+		t.current = controls.querySelector('.' + t.options.classPrefix + 'time-current');
+		t.handle = controls.querySelector('.' + t.options.classPrefix + 'time-handle');
+		t.timefloat = controls.querySelector('.' + t.options.classPrefix + 'time-float');
+		t.timefloatcurrent = controls.querySelector('.' + t.options.classPrefix + 'time-float-current');
+		t.slider = controls.querySelector('.' + t.options.classPrefix + 'time-slider');
+		t.hovered = controls.querySelector('.' + t.options.classPrefix + 'time-hovered');
+		t.buffer = controls.querySelector('.' + t.options.classPrefix + 'time-buffering');
 		t.newTime = 0;
 		t.forcedHandlePause = false;
+		t.setTransformStyle = function (element, value) {
+			element.style.transform = value;
+			element.style.webkitTransform = value;
+			element.style.MozTransform = value;
+			element.style.msTransform = value;
+			element.style.OTransform = value;
+		};
 
-		/**
-   *
-   * @private
-   * @param {Event} e
-   */
+		t.buffer.style.display = 'none';
+
 		var handleMouseMove = function handleMouseMove(e) {
-
-			var offset = t.total.offset(),
-			    width = t.total.width();
+			var totalStyles = getComputedStyle(t.total),
+			    offsetStyles = (0, _dom.offset)(t.total),
+			    width = t.total.offsetWidth,
+			    transform = function () {
+				if (totalStyles.webkitTransform !== undefined) {
+					return 'webkitTransform';
+				} else if (totalStyles.mozTransform !== undefined) {
+					return 'mozTransform ';
+				} else if (totalStyles.oTransform !== undefined) {
+					return 'oTransform';
+				} else if (totalStyles.msTransform !== undefined) {
+					return 'msTransform';
+				} else {
+					return 'transform';
+				}
+			}(),
+			    cssMatrix = function () {
+				if ('WebKitCSSMatrix' in window) {
+					return 'WebKitCSSMatrix';
+				} else if ('MSCSSMatrix' in window) {
+					return 'MSCSSMatrix';
+				} else if ('CSSMatrix' in window) {
+					return 'CSSMatrix';
+				}
+			}();
 
 			var percentage = 0,
+			    leftPos = 0,
 			    pos = 0,
 			    x = void 0;
 
-			// mouse or touch position relative to the object
 			if (e.originalEvent && e.originalEvent.changedTouches) {
 				x = e.originalEvent.changedTouches[0].pageX;
 			} else if (e.changedTouches) {
-				// for Zepto
 				x = e.changedTouches[0].pageX;
 			} else {
 				x = e.pageX;
 			}
 
-			if (media.duration) {
-				if (x < offset.left) {
-					x = offset.left;
-				} else if (x > width + offset.left) {
-					x = width + offset.left;
+			if (t.getDuration()) {
+				if (x < offsetStyles.left) {
+					x = offsetStyles.left;
+				} else if (x > width + offsetStyles.left) {
+					x = width + offsetStyles.left;
 				}
 
-				pos = x - offset.left;
+				pos = x - offsetStyles.left;
 				percentage = pos / width;
-				t.newTime = percentage <= 0.02 ? 0 : percentage * media.duration;
+				t.newTime = percentage <= 0.02 ? 0 : percentage * t.getDuration();
 
-				// fake seek to where the mouse is 
-				if (mouseIsDown && media.currentTime !== null && t.newTime.toFixed(4) !== media.currentTime.toFixed(4)) {
+				if (mouseIsDown && t.getCurrentTime() !== null && t.newTime.toFixed(4) !== t.getCurrentTime().toFixed(4)) {
 					t.setCurrentRailHandle(t.newTime);
 					t.updateCurrent(t.newTime);
 				}
 
-				// position floating time box
 				if (!_constants.IS_IOS && !_constants.IS_ANDROID) {
-					t.timefloat.css('left', pos);
-					t.timefloatcurrent.html((0, _time.secondsToTimeCode)(t.newTime, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength));
-					t.timefloat.show();
+					if (pos < 0) {
+						pos = 0;
+					}
+					if (t.options.useSmoothHover && cssMatrix !== null && typeof window[cssMatrix] !== 'undefined') {
+						var matrix = new window[cssMatrix](getComputedStyle(t.handle)[transform]),
+						    handleLocation = matrix.m41,
+						    hoverScaleX = pos / parseFloat(getComputedStyle(t.total).width) - handleLocation / parseFloat(getComputedStyle(t.total).width);
+
+						t.hovered.style.left = handleLocation + 'px';
+						t.setTransformStyle(t.hovered, 'scaleX(' + hoverScaleX + ')');
+						t.hovered.setAttribute('pos', pos);
+
+						if (hoverScaleX >= 0) {
+							(0, _dom.removeClass)(t.hovered, 'negative');
+						} else {
+							(0, _dom.addClass)(t.hovered, 'negative');
+						}
+					}
+
+					if (t.timefloat) {
+						var half = t.timefloat.offsetWidth / 2,
+						    offsetContainer = mejs.Utils.offset(t.getElement(t.container)),
+						    tooltipStyles = getComputedStyle(t.timefloat);
+
+						if (x - offsetContainer.left < t.timefloat.offsetWidth) {
+							leftPos = half;
+						} else if (x - offsetContainer.left >= t.getElement(t.container).offsetWidth - half) {
+							leftPos = t.total.offsetWidth - half;
+						} else {
+							leftPos = pos;
+						}
+
+						if ((0, _dom.hasClass)(t.getElement(t.container), t.options.classPrefix + 'long-video')) {
+							leftPos += parseFloat(tooltipStyles.marginLeft) / 2 + t.timefloat.offsetWidth / 2;
+						}
+
+						t.timefloat.style.left = leftPos + 'px';
+						t.timefloatcurrent.innerHTML = (0, _time.secondsToTimeCode)(t.newTime, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength, player.options.timeFormat);
+						t.timefloat.style.display = 'block';
+					}
 				}
+			} else if (!_constants.IS_IOS && !_constants.IS_ANDROID && t.timefloat) {
+				leftPos = t.timefloat.offsetWidth + width >= t.getElement(t.container).offsetWidth ? t.timefloat.offsetWidth / 2 : 0;
+				t.timefloat.style.left = leftPos + 'px';
+				t.timefloat.style.left = leftPos + 'px';
+				t.timefloat.style.display = 'block';
 			}
 		},
-
-		/**
-   * Update elements in progress bar for accessibility purposes only when player is paused.
-   *
-   * This is to avoid attempts to repeat the time over and over again when media is playing.
-   * @private
-   */
-		updateSlider = function updateSlider() {
-
-			var seconds = media.currentTime,
+		    updateSlider = function updateSlider() {
+			var seconds = t.getCurrentTime(),
 			    timeSliderText = _i18n2.default.t('mejs.time-slider'),
-			    time = (0, _time.secondsToTimeCode)(seconds, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength),
-			    duration = media.duration;
+			    time = (0, _time.secondsToTimeCode)(seconds, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength, player.options.timeFormat),
+			    duration = t.getDuration();
 
-			t.slider.attr({
-				'role': 'slider',
-				'tabindex': 0
-			});
+			t.slider.setAttribute('role', 'slider');
+			t.slider.tabIndex = 0;
+
 			if (media.paused) {
-				t.slider.attr({
-					'aria-label': timeSliderText,
-					'aria-valuemin': 0,
-					'aria-valuemax': duration,
-					'aria-valuenow': seconds,
-					'aria-valuetext': time
-				});
+				t.slider.setAttribute('aria-label', timeSliderText);
+				t.slider.setAttribute('aria-valuemin', 0);
+				t.slider.setAttribute('aria-valuemax', duration);
+				t.slider.setAttribute('aria-valuenow', seconds);
+				t.slider.setAttribute('aria-valuetext', time);
 			} else {
-				t.slider.removeAttr('aria-label aria-valuemin aria-valuemax aria-valuenow aria-valuetext');
+				t.slider.removeAttribute('aria-label');
+				t.slider.removeAttribute('aria-valuemin');
+				t.slider.removeAttribute('aria-valuemax');
+				t.slider.removeAttribute('aria-valuenow');
+				t.slider.removeAttribute('aria-valuetext');
 			}
 		},
-
-		/**
-   *
-   * @private
-   */
-		restartPlayer = function restartPlayer() {
-			var now = new Date();
-			if (now - lastKeyPressTime >= 1000) {
-				media.play();
+		    restartPlayer = function restartPlayer() {
+			if (new Date() - lastKeyPressTime >= 1000) {
+				t.play();
 			}
 		},
 		    handleMouseup = function handleMouseup() {
-
-			if (mouseIsDown && t.newTime.toFixed(4) !== media.currentTime.toFixed(4)) {
-				media.setCurrentTime(t.newTime);
-				player.setCurrentRail();
+			if (mouseIsDown && t.getCurrentTime() !== null && t.newTime.toFixed(4) !== t.getCurrentTime().toFixed(4)) {
+				t.setCurrentTime(t.newTime);
+				t.setCurrentRailHandle(t.newTime);
 				t.updateCurrent(t.newTime);
 			}
 			if (t.forcedHandlePause) {
-				t.media.play();
+				t.slider.focus();
+				t.play();
 			}
 			t.forcedHandlePause = false;
 		};
 
-		// Events
-		t.slider.on('focus', function () {
+		t.slider.addEventListener('focus', function () {
 			player.options.autoRewind = false;
-		}).on('blur', function () {
+		});
+		t.slider.addEventListener('blur', function () {
 			player.options.autoRewind = autoRewindInitial;
-		}).on('keydown', function (e) {
-
+		});
+		t.slider.addEventListener('keydown', function (e) {
 			if (new Date() - lastKeyPressTime >= 1000) {
-				startedPaused = media.paused;
+				startedPaused = t.paused;
 			}
 
-			if (t.options.keyActions.length) {
+			if (t.options.enableKeyboard && t.options.keyActions.length) {
 
 				var keyCode = e.which || e.keyCode || 0,
-				    duration = media.duration,
+				    duration = t.getDuration(),
 				    seekForward = player.options.defaultSeekForwardInterval(media),
 				    seekBackward = player.options.defaultSeekBackwardInterval(media);
 
-				var seekTime = media.currentTime;
+				var seekTime = t.getCurrentTime();
+				var volume = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'volume-slider');
+
+				if (keyCode === 38 || keyCode === 40) {
+					if (volume) {
+						volume.style.display = 'block';
+					}
+					if (t.isVideo) {
+						t.showControls();
+						t.startControlsTimer();
+					}
+
+					var newVolume = keyCode === 38 ? Math.min(t.volume + 0.1, 1) : Math.max(t.volume - 0.1, 0),
+					    mutePlayer = newVolume <= 0;
+					t.setVolume(newVolume);
+					t.setMuted(mutePlayer);
+					return;
+				} else {
+					if (volume) {
+						volume.style.display = 'none';
+					}
+				}
 
 				switch (keyCode) {
-					case 37: // left
-					case 40:
-						// Down
-						if (media.duration !== Infinity) {
+					case 37:
+						if (t.getDuration() !== Infinity) {
 							seekTime -= seekBackward;
 						}
 						break;
-					case 39: // Right
-					case 38:
-						// Up
-						if (media.duration !== Infinity) {
+					case 39:
+						if (t.getDuration() !== Infinity) {
 							seekTime += seekForward;
 						}
 						break;
 					case 36:
-						// Home
 						seekTime = 0;
 						break;
 					case 35:
-						// end
 						seekTime = duration;
 						break;
-					case 32:
-						// space
-						if (!_constants.IS_FIREFOX) {
-							if (media.paused) {
-								media.play();
-							} else {
-								media.pause();
-							}
-						}
-						return;
 					case 13:
-						// enter
-						if (media.paused) {
-							media.play();
-						} else {
-							media.pause();
+					case 32:
+						if (_constants.IS_FIREFOX) {
+							if (t.paused) {
+								t.play();
+							} else {
+								t.pause();
+							}
 						}
 						return;
 					default:
@@ -1923,107 +1871,143 @@ Object.assign(_player2.default.prototype, {
 				seekTime = seekTime < 0 ? 0 : seekTime >= duration ? duration : Math.floor(seekTime);
 				lastKeyPressTime = new Date();
 				if (!startedPaused) {
-					media.pause();
+					player.pause();
 				}
 
-				if (seekTime < media.duration && !startedPaused) {
+				if (seekTime < t.getDuration() && !startedPaused) {
 					setTimeout(restartPlayer, 1100);
 				}
 
-				media.setCurrentTime(seekTime);
+				t.setCurrentTime(seekTime);
+				player.showControls();
 
 				e.preventDefault();
 				e.stopPropagation();
 			}
-		}).on('mousedown touchstart', function (e) {
-			t.forcedHandlePause = false;
-			if (media.duration !== Infinity) {
-				// only handle left clicks or touch
-				if (e.which === 1 || e.which === 0) {
+		});
 
-					if (!media.paused) {
-						t.media.pause();
-						t.forcedHandlePause = true;
-					}
+		var events = ['mousedown', 'touchstart'];
 
-					mouseIsDown = true;
-					handleMouseMove(e);
-					t.globalBind('mousemove.dur touchmove.dur', function (e) {
-						handleMouseMove(e);
-					});
-					t.globalBind('mouseup.dur touchend.dur', function () {
-						handleMouseup();
-						mouseIsDown = false;
-						if (t.timefloat !== undefined) {
-							t.timefloat.hide();
+		t.slider.addEventListener('dragstart', function () {
+			return false;
+		});
+
+		for (var i = 0, total = events.length; i < total; i++) {
+			t.slider.addEventListener(events[i], function (e) {
+				t.forcedHandlePause = false;
+				if (t.getDuration() !== Infinity) {
+					if (e.which === 1 || e.which === 0) {
+						if (!t.paused) {
+							t.pause();
+							t.forcedHandlePause = true;
 						}
-						t.globalUnbind('mousemove.dur touchmove.dur mouseup.dur touchend.dur');
-					});
+
+						mouseIsDown = true;
+						handleMouseMove(e);
+						var endEvents = ['mouseup', 'touchend'];
+
+						for (var j = 0, totalEvents = endEvents.length; j < totalEvents; j++) {
+							t.getElement(t.container).addEventListener(endEvents[j], function (event) {
+								var target = event.target;
+								if (target === t.slider || target.closest('.' + t.options.classPrefix + 'time-slider')) {
+									handleMouseMove(event);
+								}
+							});
+						}
+						t.globalBind('mouseup.dur touchend.dur', function () {
+							handleMouseup();
+							mouseIsDown = false;
+							if (t.timefloat) {
+								t.timefloat.style.display = 'none';
+							}
+						});
+					}
 				}
-			}
-		}).on('mouseenter', function () {
-			if (media.duration !== Infinity) {
-				t.globalBind('mousemove.dur', function (e) {
-					handleMouseMove(e);
+			}, _constants.SUPPORT_PASSIVE_EVENT && events[i] === 'touchstart' ? { passive: true } : false);
+		}
+		t.slider.addEventListener('mouseenter', function (e) {
+			if (e.target === t.slider && t.getDuration() !== Infinity) {
+				t.getElement(t.container).addEventListener('mousemove', function (event) {
+					var target = event.target;
+					if (target === t.slider || target.closest('.' + t.options.classPrefix + 'time-slider')) {
+						handleMouseMove(event);
+					}
 				});
-				if (t.timefloat !== undefined && !_constants.IS_IOS && !_constants.IS_ANDROID) {
-					t.timefloat.show();
+				if (t.timefloat && !_constants.IS_IOS && !_constants.IS_ANDROID) {
+					t.timefloat.style.display = 'block';
+				}
+				if (t.hovered && !_constants.IS_IOS && !_constants.IS_ANDROID && t.options.useSmoothHover) {
+					(0, _dom.removeClass)(t.hovered, 'no-hover');
 				}
 			}
-		}).on('mouseleave', function () {
-			if (media.duration !== Infinity) {
+		});
+		t.slider.addEventListener('mouseleave', function () {
+			if (t.getDuration() !== Infinity) {
 				if (!mouseIsDown) {
-					t.globalUnbind('mousemove.dur');
-					if (t.timefloat !== undefined) {
-						t.timefloat.hide();
+					if (t.timefloat) {
+						t.timefloat.style.display = 'none';
+					}
+					if (t.hovered && t.options.useSmoothHover) {
+						(0, _dom.addClass)(t.hovered, 'no-hover');
 					}
 				}
 			}
 		});
 
-		// loading
-		// If media is does not have a finite duration, remove progress bar interaction
-		// and indicate that is a live broadcast
-		media.addEventListener('progress', function (e) {
-			if (media.duration !== Infinity) {
-
-				if (controls.find('.' + t.options.classPrefix + 'broadcast').length) {
-					t.slider.show();
-					controls.find('.' + t.options.classPrefix + 'broadcast').remove();
+		t.broadcastCallback = function (e) {
+			var broadcast = controls.querySelector('.' + t.options.classPrefix + 'broadcast');
+			if (!t.options.forceLive && t.getDuration() !== Infinity) {
+				if (broadcast) {
+					t.slider.style.display = '';
+					broadcast.remove();
 				}
 
 				player.setProgressRail(e);
 				if (!t.forcedHandlePause) {
 					player.setCurrentRail(e);
 				}
-			} else if (!controls.find('.' + t.options.classPrefix + 'broadcast').length) {
-				controls.find('.' + t.options.classPrefix + 'time-rail').append('<span class="' + t.options.classPrefix + 'broadcast">' + _i18n2.default.t('mejs.live-broadcast') + '</span>');
-				t.slider.hide();
+				updateSlider();
+			} else if (!broadcast || t.options.forceLive) {
+				var label = _document2.default.createElement('span');
+				label.className = t.options.classPrefix + 'broadcast';
+				label.innerText = _i18n2.default.t('mejs.live-broadcast');
+				t.slider.style.display = 'none';
+				t.rail.appendChild(label);
 			}
-		}, false);
+		};
 
-		// current time
-		media.addEventListener('timeupdate', function (e) {
-			if (media.duration !== Infinity) {
+		media.addEventListener('progress', t.broadcastCallback);
+		media.addEventListener('timeupdate', t.broadcastCallback);
+		media.addEventListener('play', function () {
+			t.buffer.style.display = 'none';
+		});
+		media.addEventListener('playing', function () {
+			t.buffer.style.display = 'none';
+		});
+		media.addEventListener('seeking', function () {
+			t.buffer.style.display = '';
+		});
+		media.addEventListener('seeked', function () {
+			t.buffer.style.display = 'none';
+		});
+		media.addEventListener('pause', function () {
+			t.buffer.style.display = 'none';
+		});
+		media.addEventListener('waiting', function () {
+			t.buffer.style.display = '';
+		});
+		media.addEventListener('loadeddata', function () {
+			t.buffer.style.display = '';
+		});
+		media.addEventListener('canplay', function () {
+			t.buffer.style.display = 'none';
+		});
+		media.addEventListener('error', function () {
+			t.buffer.style.display = 'none';
+		});
 
-				if (controls.find('.' + t.options.classPrefix + 'broadcast').length) {
-					t.slider.show();
-					controls.find('.' + t.options.classPrefix + 'broadcast').remove();
-				}
-
-				player.setProgressRail(e);
-				if (!t.forcedHandlePause) {
-					player.setCurrentRail(e);
-				}
-				updateSlider(e);
-			} else if (!controls.find('.' + t.options.classPrefix + 'broadcast').length) {
-				controls.find('.' + t.options.classPrefix + 'time-rail').append('<span class="' + t.options.classPrefix + 'broadcast">' + _i18n2.default.t('mejs.live-broadcast') + '</span>');
-				t.slider.hide();
-			}
-		}, false);
-
-		t.container.on('controlsresize', function (e) {
-			if (media.duration !== Infinity) {
+		t.getElement(t.container).addEventListener('controlsresize', function (e) {
+			if (t.getDuration() !== Infinity) {
 				player.setProgressRail(e);
 				if (!t.forcedHandlePause) {
 					player.setCurrentRail(e);
@@ -2031,229 +2015,211 @@ Object.assign(_player2.default.prototype, {
 			}
 		});
 	},
-
-	/**
-  * Calculate the progress on the media and update progress bar's width
-  *
-  * @param {Event} e
-  */
+	cleanprogress: function cleanprogress(player, controls, layers, media) {
+		media.removeEventListener('progress', player.broadcastCallback);
+		media.removeEventListener('timeupdate', player.broadcastCallback);
+		if (player.rail) {
+			player.rail.remove();
+		}
+	},
 	setProgressRail: function setProgressRail(e) {
+		var t = this,
+		    target = e !== undefined ? e.detail.target || e.target : t.media;
 
 		var percent = null;
 
-		var t = this,
-		    target = e !== undefined ? e.target : t.media;
-
-		// newest HTML5 spec has buffered array (FF4, Webkit)
-		if (target && target.buffered && target.buffered.length > 0 && target.buffered.end && target.duration) {
-			// account for a real array with multiple values - always read the end of the last buffer
-			percent = target.buffered.end(target.buffered.length - 1) / target.duration;
-		}
-		// Some browsers (e.g., FF3.6 and Safari 5) cannot calculate target.bufferered.end()
-		// to be anything other than 0. If the byte count is available we use this instead.
-		// Browsers that support the else if do not seem to have the bufferedBytes value and
-		// should skip to there. Tested in Safari 5, Webkit head, FF3.6, Chrome 6, IE 7/8.
-		else if (target && target.bytesTotal !== undefined && target.bytesTotal > 0 && target.bufferedBytes !== undefined) {
+		if (target && target.buffered && target.buffered.length > 0 && target.buffered.end && t.getDuration()) {
+			percent = target.buffered.end(target.buffered.length - 1) / t.getDuration();
+		} else if (target && target.bytesTotal !== undefined && target.bytesTotal > 0 && target.bufferedBytes !== undefined) {
 				percent = target.bufferedBytes / target.bytesTotal;
-			}
-			// Firefox 3 with an Ogg file seems to go this way
-			else if (e && e.lengthComputable && e.total !== 0) {
+			} else if (e && e.lengthComputable && e.total !== 0) {
 					percent = e.loaded / e.total;
 				}
 
-		// finally update the progress bar
 		if (percent !== null) {
 			percent = Math.min(1, Math.max(0, percent));
-			// update loaded bar
-			if (t.loaded && t.total) {
-				t.loaded.width(percent * 100 + '%');
+
+			if (t.loaded) {
+				t.setTransformStyle(t.loaded, 'scaleX(' + percent + ')');
 			}
 		}
 	},
-	/**
-  * Update the slider's width depending on the time assigned
-  *
-  * @param {Number} fakeTime
-  */
 	setCurrentRailHandle: function setCurrentRailHandle(fakeTime) {
 		var t = this;
 		t.setCurrentRailMain(t, fakeTime);
 	},
-	/**
-  * Update the slider's width depending on the current time
-  *
-  */
 	setCurrentRail: function setCurrentRail() {
 		var t = this;
 		t.setCurrentRailMain(t);
 	},
-	/**
-  * Method that handles the calculation of the width of the rail.
-  *
-  * @param {MediaElementPlayer} t
-  * @param {?Number} fakeTime
-  */
 	setCurrentRailMain: function setCurrentRailMain(t, fakeTime) {
-		if (t.media.currentTime !== undefined && t.media.duration) {
-			var nTime = typeof fakeTime === 'undefined' ? t.media.currentTime : fakeTime;
+		if (t.getCurrentTime() !== undefined && t.getDuration()) {
+			var nTime = typeof fakeTime === 'undefined' ? t.getCurrentTime() : fakeTime;
 
-			// update bar and handle
 			if (t.total && t.handle) {
-				var newWidth = Math.round(t.total.width() * nTime / t.media.duration),
-				    handlePos = newWidth - Math.round(t.handle.outerWidth(true) / 2);
+				var tW = parseFloat(getComputedStyle(t.total).width);
 
-				newWidth = nTime / t.media.duration * 100;
-				t.current.width(newWidth + '%');
-				t.handle.css('left', handlePos);
+				var newWidth = Math.round(tW * nTime / t.getDuration()),
+				    handlePos = newWidth - Math.round(t.handle.offsetWidth / 2);
+
+				handlePos = handlePos < 0 ? 0 : handlePos;
+				t.setTransformStyle(t.current, 'scaleX(' + newWidth / tW + ')');
+				t.setTransformStyle(t.handle, 'translateX(' + handlePos + 'px)');
+
+				if (t.options.useSmoothHover && !(0, _dom.hasClass)(t.hovered, 'no-hover')) {
+					var pos = parseInt(t.hovered.getAttribute('pos'), 10);
+					pos = isNaN(pos) ? 0 : pos;
+
+					var hoverScaleX = pos / tW - handlePos / tW;
+
+					t.hovered.style.left = handlePos + 'px';
+					t.setTransformStyle(t.hovered, 'scaleX(' + hoverScaleX + ')');
+
+					if (hoverScaleX >= 0) {
+						(0, _dom.removeClass)(t.hovered, 'negative');
+					} else {
+						(0, _dom.addClass)(t.hovered, 'negative');
+					}
+				}
 			}
 		}
 	}
 });
 
-},{"16":16,"23":23,"27":27,"4":4}],11:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"25":25,"26":26,"30":30,"5":5}],12:[function(_dereq_,module,exports){
 'use strict';
+
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
 
 var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _time = _dereq_(27);
+var _time = _dereq_(30);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Current/duration times
- *
- * This feature creates/updates the duration and progress times in the control bar, based on native events.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * The initial duration
-  * @type {Number}
-  */
 	duration: 0,
-	/**
-  * @type {String}
-  */
+
 	timeAndDurationSeparator: '<span> | </span>'
 });
 
 Object.assign(_player2.default.prototype, {
-
-	/**
-  * Current time constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  */
 	buildcurrent: function buildcurrent(player, controls, layers, media) {
 		var t = this,
-		    time = $('<div class="' + t.options.classPrefix + 'time" role="timer" aria-live="off">' + ('<span class="' + t.options.classPrefix + 'currenttime">' + (0, _time.secondsToTimeCode)(0, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength) + '</span>') + '</div>');
+		    time = _document2.default.createElement('div');
+
+		time.className = t.options.classPrefix + 'time';
+		time.setAttribute('role', 'timer');
+		time.setAttribute('aria-live', 'off');
+		time.innerHTML = '<span class="' + t.options.classPrefix + 'currenttime">' + (0, _time.secondsToTimeCode)(0, player.options.alwaysShowHours, player.options.showTimecodeFrameCount, player.options.framesPerSecond, player.options.secondsDecimalLength, player.options.timeFormat) + '</span>';
 
 		t.addControlElement(time, 'current');
-
-		t.currenttime = t.controls.find('.' + t.options.classPrefix + 'currenttime');
-
-		media.addEventListener('timeupdate', function () {
+		player.updateCurrent();
+		t.updateTimeCallback = function () {
 			if (t.controlsAreVisible) {
 				player.updateCurrent();
 			}
-		}, false);
+		};
+		media.addEventListener('timeupdate', t.updateTimeCallback);
 	},
-
-	/**
-  * Duration time constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  */
+	cleancurrent: function cleancurrent(player, controls, layers, media) {
+		media.removeEventListener('timeupdate', player.updateTimeCallback);
+	},
 	buildduration: function buildduration(player, controls, layers, media) {
+		var t = this,
+		    currTime = controls.lastChild.querySelector('.' + t.options.classPrefix + 'currenttime');
 
-		var t = this;
-
-		if (controls.children().last().find('.' + t.options.classPrefix + 'currenttime').length > 0) {
-			var duration = $(t.options.timeAndDurationSeparator + '<span class="' + t.options.classPrefix + 'duration">' + ((0, _time.secondsToTimeCode)(t.options.duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength) + '</span>'));
-
-			duration.appendTo(controls.find('.' + t.options.classPrefix + 'time'));
+		if (currTime) {
+			controls.querySelector('.' + t.options.classPrefix + 'time').innerHTML += t.options.timeAndDurationSeparator + '<span class="' + t.options.classPrefix + 'duration">' + ((0, _time.secondsToTimeCode)(t.options.duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength, t.options.timeFormat) + '</span>');
 		} else {
+			if (controls.querySelector('.' + t.options.classPrefix + 'currenttime')) {
+				(0, _dom.addClass)(controls.querySelector('.' + t.options.classPrefix + 'currenttime').parentNode, t.options.classPrefix + 'currenttime-container');
+			}
 
-			// add class to current time
-			controls.find('.' + t.options.classPrefix + 'currenttime').parent().addClass(t.options.classPrefix + 'currenttime-container');
+			var duration = _document2.default.createElement('div');
+			duration.className = t.options.classPrefix + 'time ' + t.options.classPrefix + 'duration-container';
+			duration.innerHTML = '<span class="' + t.options.classPrefix + 'duration">' + ((0, _time.secondsToTimeCode)(t.options.duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength, t.options.timeFormat) + '</span>');
 
-			var _duration = $('<div class="' + t.options.classPrefix + 'time ' + t.options.classPrefix + 'duration-container">' + ('<span class="' + t.options.classPrefix + 'duration">') + ((0, _time.secondsToTimeCode)(t.options.duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength) + '</span>') + '</div>');
-
-			t.addControlElement(_duration, 'duration');
+			t.addControlElement(duration, 'duration');
 		}
 
-		t.durationD = t.controls.find('.' + t.options.classPrefix + 'duration');
-
-		media.addEventListener('timeupdate', function () {
+		t.updateDurationCallback = function () {
 			if (t.controlsAreVisible) {
 				player.updateDuration();
 			}
-		}, false);
-	},
+		};
 
-	/**
-  * Update the current time and output it in format 00:00
-  *
-  */
+		media.addEventListener('timeupdate', t.updateDurationCallback);
+	},
+	cleanduration: function cleanduration(player, controls, layers, media) {
+		media.removeEventListener('timeupdate', player.updateDurationCallback);
+	},
 	updateCurrent: function updateCurrent() {
 		var t = this;
 
-		var currentTime = t.media.currentTime;
+		var currentTime = t.getCurrentTime();
 
 		if (isNaN(currentTime)) {
 			currentTime = 0;
 		}
 
-		if (t.currenttime) {
-			t.currenttime.html((0, _time.secondsToTimeCode)(currentTime, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength));
+		var timecode = (0, _time.secondsToTimeCode)(currentTime, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength, t.options.timeFormat);
+
+		if (timecode.length > 5) {
+			(0, _dom.addClass)(t.getElement(t.container), t.options.classPrefix + 'long-video');
+		} else {
+			(0, _dom.removeClass)(t.getElement(t.container), t.options.classPrefix + 'long-video');
+		}
+
+		if (t.getElement(t.controls).querySelector('.' + t.options.classPrefix + 'currenttime')) {
+			t.getElement(t.controls).querySelector('.' + t.options.classPrefix + 'currenttime').innerText = timecode;
 		}
 	},
-
-	/**
-  * Update the duration time and output it in format 00:00
-  *
-  */
 	updateDuration: function updateDuration() {
 		var t = this;
 
-		var duration = t.media.duration;
+		var duration = t.getDuration();
 
-		if (isNaN(duration) || duration === Infinity || duration < 0) {
+		if (t.media !== undefined && (isNaN(duration) || duration === Infinity || duration < 0)) {
 			t.media.duration = t.options.duration = duration = 0;
 		}
 
 		if (t.options.duration > 0) {
 			duration = t.options.duration;
 		}
-		var timecode = (0, _time.secondsToTimeCode)(duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength);
-		/* Toggle long-video class if time code is >5 digits (MM:SS) */
-		t.container.toggleClass(t.options.classPrefix + 'long-video', timecode.length > 5);
 
-		if (t.durationD && duration > 0) {
-			t.durationD.html(timecode);
+		var timecode = (0, _time.secondsToTimeCode)(duration, t.options.alwaysShowHours, t.options.showTimecodeFrameCount, t.options.framesPerSecond, t.options.secondsDecimalLength, t.options.timeFormat);
+
+		if (timecode.length > 5) {
+			(0, _dom.addClass)(t.getElement(t.container), t.options.classPrefix + 'long-video');
+		} else {
+			(0, _dom.removeClass)(t.getElement(t.container), t.options.classPrefix + 'long-video');
+		}
+
+		if (t.getElement(t.controls).querySelector('.' + t.options.classPrefix + 'duration') && duration > 0) {
+			t.getElement(t.controls).querySelector('.' + t.options.classPrefix + 'duration').innerHTML = timecode;
 		}
 	}
 });
 
-},{"16":16,"27":27}],12:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"26":26,"30":30}],13:[function(_dereq_,module,exports){
 'use strict';
 
-var _mejs = _dereq_(6);
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
+
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
@@ -2261,76 +2227,38 @@ var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _time = _dereq_(27);
+var _time = _dereq_(30);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Closed Captions (CC) button
- *
- * This feature enables the displaying of a CC button in the control bar, and also contains the methods to start media
- * with a certain language (if available), toggle captions, etc.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * Default language to start media using ISO 639-2 Language Code List (en, es, it, etc.)
-  * If there are multiple tracks for one language, the last track node found is activated
-  * @see https://www.loc.gov/standards/iso639-2/php/code_list.php
-  * @type {String}
-  */
 	startLanguage: '',
-	/**
-  * @type {?String}
-  */
+
 	tracksText: null,
-	/**
-  * @type {?String}
-  */
+
 	chaptersText: null,
-	/**
-  * Avoid to screen reader speak captions over an audio track.
-  *
-  * @type {Boolean}
-  */
+
 	tracksAriaLive: false,
-	/**
-  * Remove the [cc] button when no track nodes are present
-  * @type {Boolean}
-  */
+
 	hideCaptionsButtonWhenEmpty: true,
-	/**
-  * Change captions to pop-up if true and only one track node is found
-  * @type {Boolean}
-  */
+
 	toggleCaptionsButtonWhenOnlyOne: false,
-	/**
-  * @type {String}
-  */
+
 	slidesSelector: ''
 });
 
 Object.assign(_player2.default.prototype, {
-
-	/**
-  * @type {Boolean}
-  */
 	hasChapters: false,
 
-	/**
-  * Feature constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  */
 	buildtracks: function buildtracks(player, controls, layers, media) {
-		if (player.tracks.length === 0) {
+
+		this.findTracks();
+
+		if (!player.tracks.length && (!player.trackFiles || !player.trackFiles.length === 0)) {
 			return;
 		}
 
@@ -2338,9 +2266,8 @@ Object.assign(_player2.default.prototype, {
 		    attr = t.options.tracksAriaLive ? ' role="log" aria-live="assertive" aria-atomic="false"' : '',
 		    tracksTitle = (0, _general.isString)(t.options.tracksText) ? t.options.tracksText : _i18n2.default.t('mejs.captions-subtitles'),
 		    chaptersTitle = (0, _general.isString)(t.options.chaptersText) ? t.options.chaptersText : _i18n2.default.t('mejs.captions-chapters'),
-		    total = player.tracks.length;
+		    total = player.trackFiles === null ? player.tracks.length : player.trackFiles.length;
 
-		// If browser will do native captions, prefer mejs captions, loop through tracks and hide
 		if (t.domNode.textTracks) {
 			for (var i = t.domNode.textTracks.length - 1; i >= 0; i--) {
 				t.domNode.textTracks[i].mode = 'hidden';
@@ -2349,140 +2276,148 @@ Object.assign(_player2.default.prototype, {
 
 		t.cleartracks(player);
 
-		player.captions = $('<div class="' + t.options.classPrefix + 'captions-layer ' + t.options.classPrefix + 'layer">' + ('<div class="' + t.options.classPrefix + 'captions-position ' + t.options.classPrefix + 'captions-position-hover"' + attr + '>') + ('<span class="' + t.options.classPrefix + 'captions-text"></span>') + '</div>' + '</div>').prependTo(layers).hide();
+		player.captions = _document2.default.createElement('div');
+		player.captions.className = t.options.classPrefix + 'captions-layer ' + t.options.classPrefix + 'layer';
+		player.captions.innerHTML = '<div class="' + t.options.classPrefix + 'captions-position ' + t.options.classPrefix + 'captions-position-hover"' + attr + '>' + ('<span class="' + t.options.classPrefix + 'captions-text"></span>') + '</div>';
+		player.captions.style.display = 'none';
+		layers.insertBefore(player.captions, layers.firstChild);
 
-		player.captionsText = player.captions.find('.' + t.options.classPrefix + 'captions-text');
-		player.captionsButton = $('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'captions-button">' + ('<button type="button" aria-controls="' + t.id + '" title="' + tracksTitle + '" aria-label="' + tracksTitle + '" tabindex="0"></button>') + ('<div class="' + t.options.classPrefix + 'captions-selector ' + t.options.classPrefix + 'offscreen">') + ('<ul class="' + t.options.classPrefix + 'captions-selector-list">') + ('<li class="' + t.options.classPrefix + 'captions-selector-list-item">') + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + player.id + '_captions" id="' + player.id + '_captions_none" ') + 'value="none" checked="checked" />' + ('<label class="' + t.options.classPrefix + 'captions-selector-label ') + (t.options.classPrefix + 'captions-selected" ') + ('for="' + player.id + '_captions_none">' + _i18n2.default.t('mejs.none') + '</label>') + '</li>' + '</ul>' + '</div>' + '</div>');
+		player.captionsText = player.captions.querySelector('.' + t.options.classPrefix + 'captions-text');
+
+		player.captionsButton = _document2.default.createElement('div');
+		player.captionsButton.className = t.options.classPrefix + 'button ' + t.options.classPrefix + 'captions-button';
+		player.captionsButton.innerHTML = '<button type="button" aria-controls="' + t.id + '" title="' + tracksTitle + '" aria-label="' + tracksTitle + '" tabindex="0"></button>' + ('<div class="' + t.options.classPrefix + 'captions-selector ' + t.options.classPrefix + 'offscreen">') + ('<ul class="' + t.options.classPrefix + 'captions-selector-list">') + ('<li class="' + t.options.classPrefix + 'captions-selector-list-item">') + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + player.id + '_captions" id="' + player.id + '_captions_none" ') + 'value="none" checked disabled>' + ('<label class="' + t.options.classPrefix + 'captions-selector-label ') + (t.options.classPrefix + 'captions-selected" ') + ('for="' + player.id + '_captions_none">' + _i18n2.default.t('mejs.none') + '</label>') + '</li>' + '</ul>' + '</div>';
 
 		t.addControlElement(player.captionsButton, 'tracks');
 
-		player.chaptersButton = $('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'chapters-button">' + ('<button type="button" aria-controls="' + t.id + '" title="' + chaptersTitle + '" aria-label="' + chaptersTitle + '" tabindex="0"></button>') + ('<div class="' + t.options.classPrefix + 'chapters-selector ' + t.options.classPrefix + 'offscreen">') + ('<ul class="' + t.options.classPrefix + 'chapters-selector-list"></ul>') + '</div>' + '</div>');
+		player.captionsButton.querySelector('.' + t.options.classPrefix + 'captions-selector-input').disabled = false;
+
+		player.chaptersButton = _document2.default.createElement('div');
+		player.chaptersButton.className = t.options.classPrefix + 'button ' + t.options.classPrefix + 'chapters-button';
+		player.chaptersButton.innerHTML = '<button type="button" aria-controls="' + t.id + '" title="' + chaptersTitle + '" aria-label="' + chaptersTitle + '" tabindex="0"></button>' + ('<div class="' + t.options.classPrefix + 'chapters-selector ' + t.options.classPrefix + 'offscreen">') + ('<ul class="' + t.options.classPrefix + 'chapters-selector-list"></ul>') + '</div>';
 
 		var subtitleCount = 0;
 
 		for (var _i = 0; _i < total; _i++) {
-			var kind = player.tracks[_i].kind;
-			if (kind === 'subtitles' || kind === 'captions') {
-				subtitleCount++;
-			} else if (kind === 'chapters' && !controls.find('.' + t.options.classPrefix + 'chapter-selector').length) {
-				player.chaptersButton.insertAfter(player.captionsButton);
-			}
-		}
-
-		// if only one language then just make the button a toggle
-		if (t.options.toggleCaptionsButtonWhenOnlyOne && subtitleCount === 1) {
-			// click
-			player.captionsButton.on('click', function () {
-				var trackId = 'none';
-				if (player.selectedTrack === null) {
-					trackId = player.tracks[0].trackId;
+			var kind = player.tracks[_i].kind,
+			    src = player.tracks[_i].src;
+			if (src.trim()) {
+				if (kind === 'subtitles' || kind === 'captions') {
+					subtitleCount++;
+				} else if (kind === 'chapters' && !controls.querySelector('.' + t.options.classPrefix + 'chapter-selector')) {
+					player.captionsButton.parentNode.insertBefore(player.chaptersButton, player.captionsButton);
 				}
-				player.setTrack(trackId);
-			});
-		} else {
-			// hover or keyboard focus
-			player.captionsButton.on('mouseenter focusin', function () {
-				$(this).find('.' + t.options.classPrefix + 'captions-selector').removeClass(t.options.classPrefix + 'offscreen');
-			}).on('mouseleave focusout', function () {
-				$(this).find('.' + t.options.classPrefix + 'captions-selector').addClass(t.options.classPrefix + 'offscreen');
-			})
-			// handle clicks to the language radio buttons
-			.on('click', 'input[type=radio]', function () {
-				// value is trackId, same as the actual id, and we're using it here
-				// because the "none" checkbox doesn't have a trackId
-				// to use, but we want to know when "none" is clicked
-				player.setTrack(this.value);
-			}).on('click', '.' + t.options.classPrefix + 'captions-selector-label', function () {
-				$(this).siblings('input[type="radio"]').trigger('click');
-			})
-			//Allow up/down arrow to change the selected radio without changing the volume.
-			.on('keydown', function (e) {
-				e.stopPropagation();
-			});
-		}
-
-		player.chaptersButton.on('mouseenter focusin', function () {
-			var self = $(this),
-			    chapters = self.find('.' + t.options.classPrefix + 'chapters-selector-list').children().length;
-
-			if (chapters) {
-				self.find('.' + t.options.classPrefix + 'chapters-selector').removeClass(t.options.classPrefix + 'offscreen');
 			}
-		}).on('mouseleave focusout', function () {
-			$(this).find('.' + t.options.classPrefix + 'chapters-selector').addClass(t.options.classPrefix + 'offscreen');
-		})
-		// handle clicks to the chapters radio buttons
-		.on('click', 'input[type=radio]', function () {
-			var self = $(this);
-			player.chaptersButton.find('li').attr('aria-checked', false).end().find('.' + t.options.classPrefix + 'chapters-selected').removeClass(t.options.classPrefix + 'chapters-selected');
-
-			self.prop('checked', true).siblings('.' + t.options.classPrefix + 'chapters-selector-label').addClass(t.options.classPrefix + 'chapters-selected').end().parent().attr('aria-checked', true);
-
-			media.setCurrentTime(parseFloat(self.val()));
-			if (media.paused) {
-				media.play();
-			}
-		}).on('click', '.' + t.options.classPrefix + 'chapters-selector-label', function () {
-			$(this).siblings('input[type="radio"]').trigger('click');
-		})
-		//Allow up/down arrow to change the selected radio without changing the volume.
-		.on('keydown', function (e) {
-			e.stopPropagation();
-		});
-
-		if (!player.options.alwaysShowControls) {
-			// move with controls
-			player.container.on('controlsshown', function () {
-				// push captions above controls
-				player.container.find('.' + t.options.classPrefix + 'captions-position').addClass(t.options.classPrefix + 'captions-position-hover');
-			}).on('controlshidden', function () {
-				if (!media.paused) {
-					// move back to normal place
-					player.container.find('.' + t.options.classPrefix + 'captions-position').removeClass(t.options.classPrefix + 'captions-position-hover');
-				}
-			});
-		} else {
-			player.container.find('.' + t.options.classPrefix + 'captions-position').addClass(t.options.classPrefix + 'captions-position-hover');
 		}
 
 		player.trackToLoad = -1;
 		player.selectedTrack = null;
 		player.isLoadingTrack = false;
 
-		// add to list
 		for (var _i2 = 0; _i2 < total; _i2++) {
 			var _kind = player.tracks[_i2].kind;
-			if (_kind === 'subtitles' || _kind === 'captions') {
+			if (player.tracks[_i2].src.trim() && (_kind === 'subtitles' || _kind === 'captions')) {
 				player.addTrackButton(player.tracks[_i2].trackId, player.tracks[_i2].srclang, player.tracks[_i2].label);
 			}
 		}
 
-		// start loading tracks
 		player.loadNextTrack();
+
+		var inEvents = ['mouseenter', 'focusin'],
+		    outEvents = ['mouseleave', 'focusout'];
+
+		if (t.options.toggleCaptionsButtonWhenOnlyOne && subtitleCount === 1) {
+			player.captionsButton.addEventListener('click', function (e) {
+				var trackId = 'none';
+				if (player.selectedTrack === null) {
+					trackId = player.tracks[0].trackId;
+				}
+				var keyboard = e.keyCode || e.which;
+				player.setTrack(trackId, typeof keyboard !== 'undefined');
+			});
+		} else {
+			var labels = player.captionsButton.querySelectorAll('.' + t.options.classPrefix + 'captions-selector-label'),
+			    captions = player.captionsButton.querySelectorAll('input[type=radio]');
+
+			for (var _i3 = 0, _total = inEvents.length; _i3 < _total; _i3++) {
+				player.captionsButton.addEventListener(inEvents[_i3], function () {
+					(0, _dom.removeClass)(this.querySelector('.' + t.options.classPrefix + 'captions-selector'), t.options.classPrefix + 'offscreen');
+				});
+			}
+
+			for (var _i4 = 0, _total2 = outEvents.length; _i4 < _total2; _i4++) {
+				player.captionsButton.addEventListener(outEvents[_i4], function () {
+					(0, _dom.addClass)(this.querySelector('.' + t.options.classPrefix + 'captions-selector'), t.options.classPrefix + 'offscreen');
+				});
+			}
+
+			for (var _i5 = 0, _total3 = captions.length; _i5 < _total3; _i5++) {
+				captions[_i5].addEventListener('click', function (e) {
+					var keyboard = e.keyCode || e.which;
+					player.setTrack(this.value, typeof keyboard !== 'undefined');
+				});
+			}
+
+			for (var _i6 = 0, _total4 = labels.length; _i6 < _total4; _i6++) {
+				labels[_i6].addEventListener('click', function (e) {
+					var radio = (0, _dom.siblings)(this, function (el) {
+						return el.tagName === 'INPUT';
+					})[0],
+					    event = (0, _general.createEvent)('click', radio);
+					radio.dispatchEvent(event);
+					e.preventDefault();
+				});
+			}
+
+			player.captionsButton.addEventListener('keydown', function (e) {
+				e.stopPropagation();
+			});
+		}
+
+		for (var _i7 = 0, _total5 = inEvents.length; _i7 < _total5; _i7++) {
+			player.chaptersButton.addEventListener(inEvents[_i7], function () {
+				if (this.querySelector('.' + t.options.classPrefix + 'chapters-selector-list').children.length) {
+					(0, _dom.removeClass)(this.querySelector('.' + t.options.classPrefix + 'chapters-selector'), t.options.classPrefix + 'offscreen');
+				}
+			});
+		}
+
+		for (var _i8 = 0, _total6 = outEvents.length; _i8 < _total6; _i8++) {
+			player.chaptersButton.addEventListener(outEvents[_i8], function () {
+				(0, _dom.addClass)(this.querySelector('.' + t.options.classPrefix + 'chapters-selector'), t.options.classPrefix + 'offscreen');
+			});
+		}
+
+		player.chaptersButton.addEventListener('keydown', function (e) {
+			e.stopPropagation();
+		});
+
+		if (!player.options.alwaysShowControls) {
+			player.getElement(player.container).addEventListener('controlsshown', function () {
+				(0, _dom.addClass)(player.getElement(player.container).querySelector('.' + t.options.classPrefix + 'captions-position'), t.options.classPrefix + 'captions-position-hover');
+			});
+
+			player.getElement(player.container).addEventListener('controlshidden', function () {
+				if (!media.paused) {
+					(0, _dom.removeClass)(player.getElement(player.container).querySelector('.' + t.options.classPrefix + 'captions-position'), t.options.classPrefix + 'captions-position-hover');
+				}
+			});
+		} else {
+			(0, _dom.addClass)(player.getElement(player.container).querySelector('.' + t.options.classPrefix + 'captions-position'), t.options.classPrefix + 'captions-position-hover');
+		}
 
 		media.addEventListener('timeupdate', function () {
 			player.displayCaptions();
-		}, false);
+		});
 
 		if (player.options.slidesSelector !== '') {
-			player.slidesContainer = $(player.options.slidesSelector);
+			player.slidesContainer = _document2.default.querySelectorAll(player.options.slidesSelector);
 
 			media.addEventListener('timeupdate', function () {
 				player.displaySlides();
-			}, false);
+			});
 		}
-
-		t.container.on('controlsresize', function () {
-			t.adjustLanguageBox();
-		});
 	},
-
-	/**
-  * Feature destructor.
-  *
-  * Always has to be prefixed with `clean` and the name that was used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  */
 	cleartracks: function cleartracks(player) {
 		if (player) {
 			if (player.captions) {
@@ -2497,76 +2432,88 @@ Object.assign(_player2.default.prototype, {
 			if (player.captionsButton) {
 				player.captionsButton.remove();
 			}
-
 			if (player.chaptersButton) {
 				player.chaptersButton.remove();
 			}
 		}
 	},
-
 	rebuildtracks: function rebuildtracks() {
 		var t = this;
 		t.findTracks();
-		t.buildtracks(t, t.controls, t.layers, t.media);
+		t.buildtracks(t, t.getElement(t.controls), t.getElement(t.layers), t.media);
 	},
-
 	findTracks: function findTracks() {
 		var t = this,
-		    tracktags = t.$media.find('track');
+		    tracktags = t.trackFiles === null ? t.node.querySelectorAll('track') : t.trackFiles,
+		    total = tracktags.length;
 
-		// store for use by plugins
 		t.tracks = [];
-		tracktags.each(function (index, track) {
-
-			track = $(track);
-
-			var srclang = track.attr('srclang') ? track.attr('srclang').toLowerCase() : '';
-			var trackId = t.id + '_track_' + index + '_' + track.attr('kind') + '_' + srclang;
+		for (var i = 0; i < total; i++) {
+			var track = tracktags[i],
+			    srclang = track.getAttribute('srclang').toLowerCase() || '',
+			    trackId = t.id + '_track_' + i + '_' + track.getAttribute('kind') + '_' + srclang;
 			t.tracks.push({
 				trackId: trackId,
 				srclang: srclang,
-				src: track.attr('src'),
-				kind: track.attr('kind'),
-				label: track.attr('label') || '',
+				src: track.getAttribute('src'),
+				kind: track.getAttribute('kind'),
+				label: track.getAttribute('label') || '',
 				entries: [],
 				isLoaded: false
 			});
-		});
+		}
 	},
+	setTrack: function setTrack(trackId, setByKeyboard) {
 
-	/**
-  *
-  * @param {String} trackId, or "none" to disable captions
-  */
-	setTrack: function setTrack(trackId) {
+		var t = this,
+		    radios = t.captionsButton.querySelectorAll('input[type="radio"]'),
+		    captions = t.captionsButton.querySelectorAll('.' + t.options.classPrefix + 'captions-selected'),
+		    track = t.captionsButton.querySelector('input[value="' + trackId + '"]');
 
-		var t = this;
+		for (var i = 0, total = radios.length; i < total; i++) {
+			radios[i].checked = false;
+		}
 
-		t.captionsButton.find('input[type="radio"]').prop('checked', false).end().find('.' + t.options.classPrefix + 'captions-selected').removeClass(t.options.classPrefix + 'captions-selected').end().find('input[value="' + trackId + '"]').prop('checked', true).siblings('.' + t.options.classPrefix + 'captions-selector-label').addClass(t.options.classPrefix + 'captions-selected');
+		for (var _i9 = 0, _total7 = captions.length; _i9 < _total7; _i9++) {
+			(0, _dom.removeClass)(captions[_i9], t.options.classPrefix + 'captions-selected');
+		}
+
+		track.checked = true;
+		var labels = (0, _dom.siblings)(track, function (el) {
+			return (0, _dom.hasClass)(el, t.options.classPrefix + 'captions-selector-label');
+		});
+		for (var _i10 = 0, _total8 = labels.length; _i10 < _total8; _i10++) {
+			(0, _dom.addClass)(labels[_i10], t.options.classPrefix + 'captions-selected');
+		}
 
 		if (trackId === 'none') {
 			t.selectedTrack = null;
-			t.captionsButton.removeClass(t.options.classPrefix + 'captions-enabled');
-			return;
-		}
-
-		for (var i = 0, total = t.tracks.length; i < total; i++) {
-			var track = t.tracks[i];
-			if (track.trackId === trackId) {
-				if (t.selectedTrack === null) {
-					t.captionsButton.addClass(t.options.classPrefix + 'captions-enabled');
+			(0, _dom.removeClass)(t.captionsButton, t.options.classPrefix + 'captions-enabled');
+		} else {
+			for (var _i11 = 0, _total9 = t.tracks.length; _i11 < _total9; _i11++) {
+				var _track = t.tracks[_i11];
+				if (_track.trackId === trackId) {
+					if (t.selectedTrack === null) {
+						(0, _dom.addClass)(t.captionsButton, t.options.classPrefix + 'captions-enabled');
+					}
+					t.selectedTrack = _track;
+					t.captions.setAttribute('lang', t.selectedTrack.srclang);
+					t.displayCaptions();
+					break;
 				}
-				t.selectedTrack = track;
-				t.captions.attr('lang', t.selectedTrack.srclang);
-				t.displayCaptions();
-				break;
 			}
 		}
-	},
 
-	/**
-  *
-  */
+		var event = (0, _general.createEvent)('captionschange', t.media);
+		event.detail.caption = t.selectedTrack;
+		t.media.dispatchEvent(event);
+
+		if (!setByKeyboard) {
+			setTimeout(function () {
+				t.getElement(t.container).focus();
+			}, 500);
+		}
+	},
 	loadNextTrack: function loadNextTrack() {
 		var t = this;
 
@@ -2575,139 +2522,84 @@ Object.assign(_player2.default.prototype, {
 			t.isLoadingTrack = true;
 			t.loadTrack(t.trackToLoad);
 		} else {
-			// add done?
 			t.isLoadingTrack = false;
-
 			t.checkForTracks();
 		}
 	},
-
-	/**
-  *
-  * @param index
-  */
 	loadTrack: function loadTrack(index) {
 		var t = this,
-		    track = t.tracks[index],
-		    after = function after() {
-
-			track.isLoaded = true;
-
-			t.enableTrackButton(track);
-
-			t.loadNextTrack();
-		};
+		    track = t.tracks[index];
 
 		if (track !== undefined && (track.src !== undefined || track.src !== "")) {
-			$.ajax({
-				url: track.src,
-				dataType: 'text',
-				success: function success(d) {
+			(0, _dom.ajax)(track.src, 'text', function (d) {
+				track.entries = typeof d === 'string' && /<tt\s+xml/ig.exec(d) ? _mejs2.default.TrackFormatParser.dfxp.parse(d) : _mejs2.default.TrackFormatParser.webvtt.parse(d);
 
-					// parse the loaded file
-					if (typeof d === 'string' && /<tt\s+xml/ig.exec(d)) {
-						track.entries = _mejs2.default.TrackFormatParser.dfxp.parse(d);
-					} else {
-						track.entries = _mejs2.default.TrackFormatParser.webvtt.parse(d);
+				track.isLoaded = true;
+				t.enableTrackButton(track);
+				t.loadNextTrack();
+
+				if (track.kind === 'slides') {
+					t.setupSlides(track);
+				} else if (track.kind === 'chapters' && !t.hasChapters) {
+						t.drawChapters(track);
+						t.hasChapters = true;
 					}
-
-					after();
-
-					if (track.kind === 'slides') {
-						t.setupSlides(track);
-					}
-					// Load by default the first track with `chapters` kind
-					else if (track.kind === 'chapters' && !t.hasChapters) {
-							t.drawChapters(track);
-							t.hasChapters = true;
-						}
-				},
-				error: function error() {
-					t.removeTrackButton(track.trackId);
-					t.loadNextTrack();
-				}
+			}, function () {
+				t.removeTrackButton(track.trackId);
+				t.loadNextTrack();
 			});
 		}
 	},
-
-	/**
-  *
-  * @param {String} track - The language code
-  */
 	enableTrackButton: function enableTrackButton(track) {
 		var t = this,
 		    lang = track.srclang,
-		    target = $('#' + track.trackId);
+		    target = _document2.default.getElementById('' + track.trackId);
+
+		if (!target) {
+			return;
+		}
 
 		var label = track.label;
 
 		if (label === '') {
 			label = _i18n2.default.t(_mejs2.default.language.codes[lang]) || lang;
 		}
-
-		target.prop('disabled', false).siblings('.' + t.options.classPrefix + 'captions-selector-label').html(label);
-
-		// auto select
-		if (t.options.startLanguage === lang) {
-			target.prop('checked', true).trigger('click');
+		target.disabled = false;
+		var targetSiblings = (0, _dom.siblings)(target, function (el) {
+			return (0, _dom.hasClass)(el, t.options.classPrefix + 'captions-selector-label');
+		});
+		for (var i = 0, total = targetSiblings.length; i < total; i++) {
+			targetSiblings[i].innerHTML = label;
 		}
 
-		t.adjustLanguageBox();
+		if (t.options.startLanguage === lang) {
+			target.checked = true;
+			var event = (0, _general.createEvent)('click', target);
+			target.dispatchEvent(event);
+		}
 	},
-
-	/**
-  *
-  * @param {String} trackId
-  */
 	removeTrackButton: function removeTrackButton(trackId) {
-		var t = this;
-
-		t.captionsButton.find('input[id=' + trackId + ']').closest('li').remove();
-
-		t.adjustLanguageBox();
+		var element = _document2.default.getElementById('' + trackId);
+		if (element) {
+			var button = element.closest('li');
+			if (button) {
+				button.remove();
+			}
+		}
 	},
-
-	/**
-  *
-  * @param {String} trackId
-  * @param {String} lang - The language code
-  * @param {String} label
-  */
 	addTrackButton: function addTrackButton(trackId, lang, label) {
 		var t = this;
 		if (label === '') {
 			label = _i18n2.default.t(_mejs2.default.language.codes[lang]) || lang;
 		}
 
-		// trackId is used in the value, too, because the "none"
-		// caption option doesn't have a trackId but we need to be able
-		// to set it, too
-		t.captionsButton.find('ul').append($('<li class="' + t.options.classPrefix + 'captions-selector-list-item">' + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + t.id + '_captions" id="' + trackId + '" value="' + trackId + '" disabled="disabled" />') + ('<label class="' + t.options.classPrefix + 'captions-selector-label">' + label + ' (loading)</label>') + '</li>'));
-
-		t.adjustLanguageBox();
-
-		// remove this from the dropdownlist (if it exists)
-		t.container.find('.' + t.options.classPrefix + 'captions-translations option[value=' + lang + ']').remove();
+		t.captionsButton.querySelector('ul').innerHTML += '<li class="' + t.options.classPrefix + 'captions-selector-list-item">' + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + t.id + '_captions" id="' + trackId + '" value="' + trackId + '" disabled>') + ('<label class="' + t.options.classPrefix + 'captions-selector-label"') + ('for="' + trackId + '">' + label + ' (loading)</label>') + '</li>';
 	},
-
-	/**
-  *
-  */
-	adjustLanguageBox: function adjustLanguageBox() {
-		var t = this;
-		// adjust the size of the outer box
-		t.captionsButton.find('.' + t.options.classPrefix + 'captions-selector').height(t.captionsButton.find('.' + t.options.classPrefix + 'captions-selector-list').outerHeight(true) + t.captionsButton.find('.' + t.options.classPrefix + 'captions-translations').outerHeight(true));
-	},
-
-	/**
-  *
-  */
 	checkForTracks: function checkForTracks() {
 		var t = this;
 
 		var hasSubtitles = false;
 
-		// check if any subtitles
 		if (t.options.hideCaptionsButtonWhenEmpty) {
 			for (var i = 0, total = t.tracks.length; i < total; i++) {
 				var kind = t.tracks[i].kind;
@@ -2717,18 +2609,11 @@ Object.assign(_player2.default.prototype, {
 				}
 			}
 
-			if (!hasSubtitles) {
-				t.captionsButton.hide();
-				t.setControlsSize();
-			}
+			t.captionsButton.style.display = hasSubtitles ? '' : 'none';
+			t.setControlsSize();
 		}
 	},
-
-	/**
-  *
-  */
 	displayCaptions: function displayCaptions() {
-
 		if (this.tracks === undefined) {
 			return;
 		}
@@ -2736,30 +2621,25 @@ Object.assign(_player2.default.prototype, {
 		var t = this,
 		    track = t.selectedTrack,
 		    sanitize = function sanitize(html) {
-
-			var div = document.createElement('div');
-
+			var div = _document2.default.createElement('div');
 			div.innerHTML = html;
 
-			// Remove all `<script>` tags first
 			var scripts = div.getElementsByTagName('script');
 			var i = scripts.length;
 			while (i--) {
-				scripts[i].parentNode.removeChild(scripts[i]);
+				scripts[i].remove();
 			}
 
-			// Loop the elements and remove anything that contains value="javascript:" or an `on*` attribute
-			// (`onerror`, `onclick`, etc.)
 			var allElements = div.getElementsByTagName('*');
-			for (var _i3 = 0, n = allElements.length; _i3 < n; _i3++) {
-				var attributesObj = allElements[_i3].attributes,
+			for (var _i12 = 0, n = allElements.length; _i12 < n; _i12++) {
+				var attributesObj = allElements[_i12].attributes,
 				    attributes = Array.prototype.slice.call(attributesObj);
 
 				for (var j = 0, total = attributes.length; j < total; j++) {
 					if (attributes[j].name.startsWith('on') || attributes[j].value.startsWith('javascript')) {
-						allElements[_i3].parentNode.removeChild(allElements[_i3]);
+						allElements[_i12].remove();
 					} else if (attributes[j].name === 'style') {
-						allElements[_i3].removeAttribute(attributes[j].name);
+						allElements[_i12].removeAttribute(attributes[j].name);
 					}
 				}
 			}
@@ -2769,80 +2649,76 @@ Object.assign(_player2.default.prototype, {
 		if (track !== null && track.isLoaded) {
 			var i = t.searchTrackPosition(track.entries, t.media.currentTime);
 			if (i > -1) {
-				// Set the line before the timecode as a class so the cue can be targeted if needed
-				t.captionsText.html(sanitize(track.entries[i].text)).attr('class', t.options.classPrefix + 'captions-text ' + (track.entries[i].identifier || ''));
-				t.captions.show().height(0);
-				return; // exit out if one is visible;
+				t.captionsText.innerHTML = sanitize(track.entries[i].text);
+				t.captionsText.className = t.options.classPrefix + 'captions-text ' + (track.entries[i].identifier || '');
+				t.captions.style.display = '';
+				t.captions.style.height = '0px';
+				return;
 			}
-
-			t.captions.hide();
+			t.captions.style.display = 'none';
 		} else {
-			t.captions.hide();
+			t.captions.style.display = 'none';
 		}
 	},
-
-	/**
-  *
-  * @param {HTMLElement} track
-  */
 	setupSlides: function setupSlides(track) {
 		var t = this;
-
 		t.slides = track;
 		t.slides.entries.imgs = [t.slides.entries.length];
 		t.showSlide(0);
 	},
-
-	/**
-  *
-  * @param {Number} index
-  */
 	showSlide: function showSlide(index) {
-		if (this.tracks === undefined || this.slidesContainer === undefined) {
+		var _this = this;
+
+		var t = this;
+
+		if (t.tracks === undefined || t.slidesContainer === undefined) {
 			return;
 		}
 
-		var t = this,
-		    url = t.slides.entries[index].text;
+		var url = t.slides.entries[index].text;
 
 		var img = t.slides.entries[index].imgs;
 
 		if (img === undefined || img.fadeIn === undefined) {
-
-			t.slides.entries[index].imgs = img = $('<img src="' + url + '">').on('load', function () {
-				img.appendTo(t.slidesContainer).hide().fadeIn().siblings(':visible').fadeOut();
+			var image = _document2.default.createElement('img');
+			image.src = url;
+			image.addEventListener('load', function () {
+				var self = _this,
+				    visible = (0, _dom.siblings)(self, function (el) {
+					return visible(el);
+				});
+				self.style.display = 'none';
+				t.slidesContainer.innerHTML += self.innerHTML;
+				(0, _dom.fadeIn)(t.slidesContainer.querySelector(image));
+				for (var i = 0, total = visible.length; i < total; i++) {
+					(0, _dom.fadeOut)(visible[i], 400);
+				}
 			});
-		} else {
-
-			if (!img.is(':visible') && !img.is(':animated')) {
-				img.fadeIn().siblings(':visible').fadeOut();
+			t.slides.entries[index].imgs = img = image;
+		} else if (!(0, _dom.visible)(img)) {
+			var _visible = (0, _dom.siblings)(self, function (el) {
+				return _visible(el);
+			});
+			(0, _dom.fadeIn)(t.slidesContainer.querySelector(img));
+			for (var i = 0, total = _visible.length; i < total; i++) {
+				(0, _dom.fadeOut)(_visible[i]);
 			}
 		}
 	},
-
-	/**
-  *
-  */
 	displaySlides: function displaySlides() {
+		var t = this;
 
 		if (this.slides === undefined) {
 			return;
 		}
 
-		var t = this,
-		    slides = t.slides,
+		var slides = t.slides,
 		    i = t.searchTrackPosition(slides.entries, t.media.currentTime);
 
 		if (i > -1) {
 			t.showSlide(i);
-			return; // exit out if one is visible;
 		}
 	},
-
-	/**
-  *
-  * @param {Object} chapters
-  */
 	drawChapters: function drawChapters(chapters) {
 		var t = this,
 		    total = chapters.entries.length;
@@ -2851,26 +2727,59 @@ Object.assign(_player2.default.prototype, {
 			return;
 		}
 
-		t.chaptersButton.find('ul').empty();
+		t.chaptersButton.querySelector('ul').innerHTML = '';
 
 		for (var i = 0; i < total; i++) {
-			t.chaptersButton.find('ul').append($('<li class="' + t.options.classPrefix + 'chapters-selector-list-item" ' + 'role="menuitemcheckbox" aria-live="polite" aria-disabled="false" aria-checked="false">' + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + t.id + '_chapters" value="' + chapters.entries[i].start + '" disabled>') + ('<label class="' + t.options.classPrefix + 'chapters-selector-label">' + chapters.entries[i].text + '</label>') + '</li>'));
+			t.chaptersButton.querySelector('ul').innerHTML += '<li class="' + t.options.classPrefix + 'chapters-selector-list-item" ' + 'role="menuitemcheckbox" aria-live="polite" aria-disabled="false" aria-checked="false">' + ('<input type="radio" class="' + t.options.classPrefix + 'captions-selector-input" ') + ('name="' + t.id + '_chapters" id="' + t.id + '_chapters_' + i + '" value="' + chapters.entries[i].start + '" disabled>') + ('<label class="' + t.options.classPrefix + 'chapters-selector-label"') + ('for="' + t.id + '_chapters_' + i + '">' + chapters.entries[i].text + '</label>') + '</li>';
 		}
 
-		$.each(t.chaptersButton.find('input[type="radio"]'), function () {
-			$(this).prop({
-				disabled: false,
-				checked: false
+		var radios = t.chaptersButton.querySelectorAll('input[type="radio"]'),
+		    labels = t.chaptersButton.querySelectorAll('.' + t.options.classPrefix + 'chapters-selector-label');
+
+		for (var _i13 = 0, _total10 = radios.length; _i13 < _total10; _i13++) {
+			radios[_i13].disabled = false;
+			radios[_i13].checked = false;
+			radios[_i13].addEventListener('click', function (e) {
+				var self = this,
+				    listItems = t.chaptersButton.querySelectorAll('li'),
+				    label = (0, _dom.siblings)(self, function (el) {
+					return (0, _dom.hasClass)(el, t.options.classPrefix + 'chapters-selector-label');
+				})[0];
+
+				self.checked = true;
+				self.parentNode.setAttribute('aria-checked', true);
+				(0, _dom.addClass)(label, t.options.classPrefix + 'chapters-selected');
+				(0, _dom.removeClass)(t.chaptersButton.querySelector('.' + t.options.classPrefix + 'chapters-selected'), t.options.classPrefix + 'chapters-selected');
+
+				for (var _i14 = 0, _total11 = listItems.length; _i14 < _total11; _i14++) {
+					listItems[_i14].setAttribute('aria-checked', false);
+				}
+
+				var keyboard = e.keyCode || e.which;
+				if (typeof keyboard === 'undefined') {
+					setTimeout(function () {
+						t.getElement(t.container).focus();
+					}, 500);
+				}
+
+				t.media.setCurrentTime(parseFloat(self.value));
+				if (t.media.paused) {
+					t.media.play();
+				}
 			});
-		});
+		}
+
+		for (var _i15 = 0, _total12 = labels.length; _i15 < _total12; _i15++) {
+			labels[_i15].addEventListener('click', function (e) {
+				var radio = (0, _dom.siblings)(this, function (el) {
+					return el.tagName === 'INPUT';
+				})[0],
+				    event = (0, _general.createEvent)('click', radio);
+				radio.dispatchEvent(event);
+				e.preventDefault();
+			});
+		}
 	},
-	/**
-  * Perform binary search to look for proper track index
-  *
-  * @param {Object[]} tracks
-  * @param {Number} currentTime
-  * @return {Number}
-  */
 	searchTrackPosition: function searchTrackPosition(tracks, currentTime) {
 		var lo = 0,
 		    hi = tracks.length - 1,
@@ -2896,11 +2805,6 @@ Object.assign(_player2.default.prototype, {
 	}
 });
 
-/**
- * Map all possible languages with their respective code
- *
- * @constructor
- */
 _mejs2.default.language = {
 	codes: {
 		af: 'mejs.afrikaans',
@@ -2961,35 +2865,10 @@ _mejs2.default.language = {
 	}
 };
 
-/*
- Parses WebVTT format which should be formatted as
- ================================
- WEBVTT
-
- 1
- 00:00:01,1 --> 00:00:05,000
- A line of text
-
- 2
- 00:01:15,1 --> 00:02:05,000
- A second line of text
-
- ===============================
-
- Adapted from: http://www.delphiki.com/html5/playr
- */
 _mejs2.default.TrackFormatParser = {
 	webvtt: {
-		/**
-   * @type {String}
-   */
 		pattern: /^((?:[0-9]{1,2}:)?[0-9]{2}:[0-9]{2}([,.][0-9]{1,3})?) --\> ((?:[0-9]{1,2}:)?[0-9]{2}:[0-9]{2}([,.][0-9]{3})?)(.*)$/,
 
-		/**
-   *
-   * @param {String} trackText
-   * @returns {{text: Array, times: Array}}
-   */
 		parse: function parse(trackText) {
 			var lines = trackText.split(/\r?\n/),
 			    entries = [];
@@ -3006,14 +2885,14 @@ _mejs2.default.TrackFormatParser = {
 						identifier = lines[i - 1];
 					}
 					i++;
-					// grab all the (possibly multi-line) text that follows
+
 					text = lines[i];
 					i++;
 					while (lines[i] !== '' && i < lines.length) {
 						text = text + '\n' + lines[i];
 						i++;
 					}
-					text = $.trim(text).replace(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig, "<a href='$1' target='_blank'>$1</a>");
+					text = text.trim().replace(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig, "<a href='$1' target='_blank'>$1</a>");
 					entries.push({
 						identifier: identifier,
 						start: (0, _time.convertSMPTEtoSeconds)(timecode[1]) === 0 ? 0.200 : (0, _time.convertSMPTEtoSeconds)(timecode[1]),
@@ -3027,24 +2906,20 @@ _mejs2.default.TrackFormatParser = {
 			return entries;
 		}
 	},
-	// Thanks to Justin Capella: https://github.com/johndyer/mediaelement/pull/420
+
 	dfxp: {
-		/**
-   *
-   * @param {String} trackText
-   * @returns {{text: Array, times: Array}}
-   */
 		parse: function parse(trackText) {
 			trackText = $(trackText).filter('tt');
-			var container = trackText.children('div').eq(0),
-			    lines = container.find('p'),
-			    styleNode = trackText.find('#' + container.attr('style')),
+			var container = trackText.firstChild,
+			    lines = container.querySelectorAll('p'),
+			    styleNode = trackText.getElementById('' + container.attr('style')),
 			    entries = [];
 
 			var styles = void 0;
 
 			if (styleNode.length) {
-				var attributes = styleNode.removeAttr('id').get(0).attributes;
+				styleNode.removeAttribute('id');
+				var attributes = styleNode.attributes;
 				if (attributes.length) {
 					styles = {};
 					for (var i = 0, total = attributes.length; i < total; i++) {
@@ -3053,7 +2928,7 @@ _mejs2.default.TrackFormatParser = {
 				}
 			}
 
-			for (var _i4 = 0, _total = lines.length; _i4 < _total; _i4++) {
+			for (var _i16 = 0, _total13 = lines.length; _i16 < _total13; _i16++) {
 				var style = void 0,
 				    _temp = {
 					start: null,
@@ -3062,17 +2937,17 @@ _mejs2.default.TrackFormatParser = {
 					text: null
 				};
 
-				if (lines.eq(_i4).attr('begin')) {
-					_temp.start = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i4).attr('begin'));
+				if (lines.eq(_i16).attr('begin')) {
+					_temp.start = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i16).attr('begin'));
 				}
-				if (!_temp.start && lines.eq(_i4 - 1).attr('end')) {
-					_temp.start = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i4 - 1).attr('end'));
+				if (!_temp.start && lines.eq(_i16 - 1).attr('end')) {
+					_temp.start = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i16 - 1).attr('end'));
 				}
-				if (lines.eq(_i4).attr('end')) {
-					_temp.stop = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i4).attr('end'));
+				if (lines.eq(_i16).attr('end')) {
+					_temp.stop = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i16).attr('end'));
 				}
-				if (!_temp.stop && lines.eq(_i4 + 1).attr('begin')) {
-					_temp.stop = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i4 + 1).attr('begin'));
+				if (!_temp.stop && lines.eq(_i16 + 1).attr('begin')) {
+					_temp.stop = (0, _time.convertSMPTEtoSeconds)(lines.eq(_i16 + 1).attr('begin'));
 				}
 
 				if (styles) {
@@ -3087,7 +2962,7 @@ _mejs2.default.TrackFormatParser = {
 				if (_temp.start === 0) {
 					_temp.start = 0.200;
 				}
-				_temp.text = $.trim(lines.eq(_i4).html()).replace(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig, "<a href='$1' target='_blank'>$1</a>");
+				_temp.text = lines.eq(_i16).innerHTML.trim().replace(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig, "<a href='$1' target='_blank'>$1</a>");
 				entries.push(_temp);
 			}
 			return entries;
@@ -3095,73 +2970,47 @@ _mejs2.default.TrackFormatParser = {
 	}
 };
 
-},{"16":16,"24":24,"27":27,"4":4,"6":6}],13:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"26":26,"27":27,"30":30,"5":5,"7":7}],14:[function(_dereq_,module,exports){
 'use strict';
+
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
 
 var _player = _dereq_(16);
 
 var _player2 = _interopRequireDefault(_player);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Volume button
- *
- * This feature enables the displaying of a Volume button in the control bar, and also contains logic to manipulate its
- * events, such as sliding up/down (or left/right, if vertical), muting/unmuting media, etc.
- */
-
-// Feature configuration
 Object.assign(_player.config, {
-	/**
-  * @type {?String}
-  */
 	muteText: null,
-	/**
-  * @type {?String}
-  */
+
 	unmuteText: null,
-	/**
-  * @type {?String}
-  */
+
 	allyVolumeControlText: null,
-	/**
-  * @type {Boolean}
-  */
+
 	hideVolumeOnTouchDevices: true,
-	/**
-  * @type {String}
-  */
+
 	audioVolume: 'horizontal',
-	/**
-  * @type {String}
-  */
-	videoVolume: 'vertical'
+
+	videoVolume: 'vertical',
+
+	startVolume: 0.8
 });
 
 Object.assign(_player2.default.prototype, {
-
-	/**
-  * Feature constructor.
-  *
-  * Always has to be prefixed with `build` and the name that will be used in MepDefaults.features list
-  * @param {MediaElementPlayer} player
-  * @param {$} controls
-  * @param {$} layers
-  * @param {HTMLElement} media
-  * @public
-  */
 	buildvolume: function buildvolume(player, controls, layers, media) {
-
-		// Android and iOS don't support volume controls
 		if ((_constants.IS_ANDROID || _constants.IS_IOS) && this.options.hideVolumeOnTouchDevices) {
 			return;
 		}
@@ -3171,178 +3020,221 @@ Object.assign(_player2.default.prototype, {
 		    muteText = (0, _general.isString)(t.options.muteText) ? t.options.muteText : _i18n2.default.t('mejs.mute'),
 		    unmuteText = (0, _general.isString)(t.options.unmuteText) ? t.options.unmuteText : _i18n2.default.t('mejs.unmute'),
 		    volumeControlText = (0, _general.isString)(t.options.allyVolumeControlText) ? t.options.allyVolumeControlText : _i18n2.default.t('mejs.volume-help-text'),
-		    mute = mode === 'horizontal' ?
+		    mute = _document2.default.createElement('div');
 
-		// horizontal version
-		$('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'volume-button ' + t.options.classPrefix + 'mute">' + ('<button type="button" aria-controls="' + t.id + '" title="' + muteText + '" aria-label="' + muteText + '" tabindex="0"></button>') + '</div>' + ('<a href="javascript:void(0);" class="' + t.options.classPrefix + 'horizontal-volume-slider">') + ('<span class="' + t.options.classPrefix + 'offscreen">' + volumeControlText + '</span>') + ('<div class="' + t.options.classPrefix + 'horizontal-volume-total">') + ('<div class="' + t.options.classPrefix + 'horizontal-volume-current"></div>') + ('<div class="' + t.options.classPrefix + 'horizontal-volume-handle"></div>') + '</div>' + '</a>').appendTo(controls) :
-
-		// vertical version
-		$('<div class="' + t.options.classPrefix + 'button ' + t.options.classPrefix + 'volume-button ' + t.options.classPrefix + 'mute">' + ('<button type="button" aria-controls="' + t.id + '" title="' + muteText + '" aria-label="' + muteText + '" tabindex="0"></button>') + ('<a href="javascript:void(0);" class="' + t.options.classPrefix + 'volume-slider">') + ('<span class="' + t.options.classPrefix + 'offscreen">' + volumeControlText + '</span>') + ('<div class="' + t.options.classPrefix + 'volume-total">') + ('<div class="' + t.options.classPrefix + 'volume-current"></div>') + ('<div class="' + t.options.classPrefix + 'volume-handle"></div>') + '</div>' + '</a>' + '</div>');
+		mute.className = t.options.classPrefix + 'button ' + t.options.classPrefix + 'volume-button ' + t.options.classPrefix + 'mute';
+		mute.innerHTML = mode === 'horizontal' ? '<button type="button" aria-controls="' + t.id + '" title="' + muteText + '" aria-label="' + muteText + '" tabindex="0"></button>' : '<button type="button" aria-controls="' + t.id + '" title="' + muteText + '" aria-label="' + muteText + '" tabindex="0"></button>' + ('<a href="javascript:void(0);" class="' + t.options.classPrefix + 'volume-slider" ') + ('aria-label="' + _i18n2.default.t('mejs.volume-slider') + '" aria-valuemin="0" aria-valuemax="100" role="slider" ') + 'aria-orientation="vertical">' + ('<span class="' + t.options.classPrefix + 'offscreen">' + volumeControlText + '</span>') + ('<div class="' + t.options.classPrefix + 'volume-total">') + ('<div class="' + t.options.classPrefix + 'volume-current"></div>') + ('<div class="' + t.options.classPrefix + 'volume-handle"></div>') + '</div>' + '</a>';
 
 		t.addControlElement(mute, 'volume');
 
-		var volumeSlider = t.container.find('.' + t.options.classPrefix + 'volume-slider, \n\t\t\t\t.' + t.options.classPrefix + 'horizontal-volume-slider'),
-		    volumeTotal = t.container.find('.' + t.options.classPrefix + 'volume-total, \n\t\t\t\t.' + t.options.classPrefix + 'horizontal-volume-total'),
-		    volumeCurrent = t.container.find('.' + t.options.classPrefix + 'volume-current, \n\t\t\t\t.' + t.options.classPrefix + 'horizontal-volume-current'),
-		    volumeHandle = t.container.find('.' + t.options.classPrefix + 'volume-handle, \n\t\t\t\t.' + t.options.classPrefix + 'horizontal-volume-handle'),
+		t.options.keyActions.push({
+			keys: [38],
+			action: function action(player) {
+				var volumeSlider = player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'volume-slider');
+				if (volumeSlider || player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'volume-slider').matches(':focus')) {
+					volumeSlider.style.display = 'block';
+				}
+				if (player.isVideo) {
+					player.showControls();
+					player.startControlsTimer();
+				}
 
+				var newVolume = Math.min(player.volume + 0.1, 1);
+				player.setVolume(newVolume);
+				if (newVolume > 0) {
+					player.setMuted(false);
+				}
+			}
+		}, {
+			keys: [40],
+			action: function action(player) {
+				var volumeSlider = player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'volume-slider');
+				if (volumeSlider) {
+					volumeSlider.style.display = 'block';
+				}
 
-		/**
-   * @private
-   * @param {Number} volume
-   */
-		positionVolumeHandle = function positionVolumeHandle(volume) {
+				if (player.isVideo) {
+					player.showControls();
+					player.startControlsTimer();
+				}
 
-			// correct to 0-1
+				var newVolume = Math.max(player.volume - 0.1, 0);
+				player.setVolume(newVolume);
+
+				if (newVolume <= 0.1) {
+					player.setMuted(true);
+				}
+			}
+		}, {
+			keys: [77],
+			action: function action(player) {
+				player.getElement(player.container).querySelector('.' + _player.config.classPrefix + 'volume-slider').style.display = 'block';
+				if (player.isVideo) {
+					player.showControls();
+					player.startControlsTimer();
+				}
+				if (player.media.muted) {
+					player.setMuted(false);
+				} else {
+					player.setMuted(true);
+				}
+			}
+		});
+
+		if (mode === 'horizontal') {
+			var anchor = _document2.default.createElement('a');
+			anchor.className = t.options.classPrefix + 'horizontal-volume-slider';
+			anchor.href = 'javascript:void(0);';
+			anchor.setAttribute('aria-label', _i18n2.default.t('mejs.volume-slider'));
+			anchor.setAttribute('aria-valuemin', 0);
+			anchor.setAttribute('aria-valuemax', 100);
+			anchor.setAttribute('role', 'slider');
+			anchor.innerHTML += '<span class="' + t.options.classPrefix + 'offscreen">' + volumeControlText + '</span>' + ('<div class="' + t.options.classPrefix + 'horizontal-volume-total">') + ('<div class="' + t.options.classPrefix + 'horizontal-volume-current"></div>') + ('<div class="' + t.options.classPrefix + 'horizontal-volume-handle"></div>') + '</div>';
+			mute.parentNode.insertBefore(anchor, mute.nextSibling);
+		}
+
+		var mouseIsDown = false,
+		    mouseIsOver = false,
+		    modified = false,
+		    updateVolumeSlider = function updateVolumeSlider() {
+			var volume = Math.floor(media.volume * 100);
+			volumeSlider.setAttribute('aria-valuenow', volume);
+			volumeSlider.setAttribute('aria-valuetext', volume + '%');
+		};
+
+		var volumeSlider = mode === 'vertical' ? t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'volume-slider') : t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'horizontal-volume-slider'),
+		    volumeTotal = mode === 'vertical' ? t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'volume-total') : t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'horizontal-volume-total'),
+		    volumeCurrent = mode === 'vertical' ? t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'volume-current') : t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'horizontal-volume-current'),
+		    volumeHandle = mode === 'vertical' ? t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'volume-handle') : t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'horizontal-volume-handle'),
+		    positionVolumeHandle = function positionVolumeHandle(volume) {
+
+			if (volume === null || isNaN(volume) || volume === undefined) {
+				return;
+			}
+
 			volume = Math.max(0, volume);
 			volume = Math.min(volume, 1);
 
-			// adjust mute button style
 			if (volume === 0) {
-				mute.removeClass(t.options.classPrefix + 'mute').addClass(t.options.classPrefix + 'unmute');
-				mute.children('button').attr({
-					title: unmuteText,
-					'aria-label': unmuteText
-				});
+				(0, _dom.removeClass)(mute, t.options.classPrefix + 'mute');
+				(0, _dom.addClass)(mute, t.options.classPrefix + 'unmute');
+				var button = mute.firstElementChild;
+				button.setAttribute('title', unmuteText);
+				button.setAttribute('aria-label', unmuteText);
 			} else {
-				mute.removeClass(t.options.classPrefix + 'unmute').addClass(t.options.classPrefix + 'mute');
-				mute.children('button').attr({
-					title: muteText,
-					'aria-label': muteText
-				});
+				(0, _dom.removeClass)(mute, t.options.classPrefix + 'unmute');
+				(0, _dom.addClass)(mute, t.options.classPrefix + 'mute');
+				var _button = mute.firstElementChild;
+				_button.setAttribute('title', muteText);
+				_button.setAttribute('aria-label', muteText);
 			}
 
-			var volumePercentage = volume * 100 + '%';
+			var volumePercentage = volume * 100 + '%',
+			    volumeStyles = getComputedStyle(volumeHandle);
 
-			// position slider
 			if (mode === 'vertical') {
-				volumeCurrent.css({
-					bottom: '0',
-					height: volumePercentage
-				});
-				volumeHandle.css({
-					bottom: volumePercentage,
-					marginBottom: -volumeHandle.height() / 2 + 'px'
-				});
+				volumeCurrent.style.bottom = 0;
+				volumeCurrent.style.height = volumePercentage;
+				volumeHandle.style.bottom = volumePercentage;
+				volumeHandle.style.marginBottom = -parseFloat(volumeStyles.height) / 2 + 'px';
 			} else {
-				volumeCurrent.css({
-					left: '0',
-					width: volumePercentage
-				});
-				volumeHandle.css({
-					left: volumePercentage,
-					marginLeft: -volumeHandle.width() / 2 + 'px'
-				});
+				volumeCurrent.style.left = 0;
+				volumeCurrent.style.width = volumePercentage;
+				volumeHandle.style.left = volumePercentage;
+				volumeHandle.style.marginLeft = -parseFloat(volumeStyles.width) / 2 + 'px';
 			}
 		},
+		    handleVolumeMove = function handleVolumeMove(e) {
+			var totalOffset = (0, _dom.offset)(volumeTotal),
+			    volumeStyles = getComputedStyle(volumeTotal);
 
-		/**
-   * @private
-   */
-		handleVolumeMove = function handleVolumeMove(e) {
+			modified = true;
 
-			var volume = null,
-			    totalOffset = volumeTotal.offset();
+			var volume = null;
 
-			// calculate the new volume based on the most recent position
 			if (mode === 'vertical') {
-
-				var railHeight = volumeTotal.height(),
+				var railHeight = parseFloat(volumeStyles.height),
 				    newY = e.pageY - totalOffset.top;
 
 				volume = (railHeight - newY) / railHeight;
 
-				// the controls just hide themselves (usually when mouse moves too far up)
 				if (totalOffset.top === 0 || totalOffset.left === 0) {
 					return;
 				}
 			} else {
-				var railWidth = volumeTotal.width(),
+				var railWidth = parseFloat(volumeStyles.width),
 				    newX = e.pageX - totalOffset.left;
 
 				volume = newX / railWidth;
 			}
 
-			// ensure the volume isn't outside 0-1
 			volume = Math.max(0, volume);
 			volume = Math.min(volume, 1);
 
-			// position the slider and handle
 			positionVolumeHandle(volume);
 
-			// set the media object (this will trigger the `volumechanged` event)
-			if (volume === 0) {
-				media.setMuted(true);
+			t.setMuted(volume === 0);
+			t.setVolume(volume);
+
+			e.preventDefault();
+			e.stopPropagation();
+		},
+		    toggleMute = function toggleMute() {
+			if (t.muted) {
+				positionVolumeHandle(0);
+				(0, _dom.removeClass)(mute, t.options.classPrefix + 'mute');
+				(0, _dom.addClass)(mute, t.options.classPrefix + 'unmute');
 			} else {
-				media.setMuted(false);
+				positionVolumeHandle(media.volume);
+				(0, _dom.removeClass)(mute, t.options.classPrefix + 'unmute');
+				(0, _dom.addClass)(mute, t.options.classPrefix + 'mute');
 			}
-			media.setVolume(volume);
 		};
 
-		var mouseIsDown = false,
-		    mouseIsOver = false;
-
-		// SLIDER
-		mute.on('mouseenter focusin', function () {
-			volumeSlider.show();
-			mouseIsOver = true;
-		}).on('mouseleave focusout', function () {
-			mouseIsOver = false;
-
-			if (!mouseIsDown && mode === 'vertical') {
-				volumeSlider.hide();
+		player.getElement(player.container).addEventListener('keydown', function (e) {
+			var hasFocus = !!e.target.closest('.' + t.options.classPrefix + 'container');
+			if (!hasFocus && mode === 'vertical') {
+				volumeSlider.style.display = 'none';
 			}
 		});
 
-		/**
-   * @private
-   */
-		var updateVolumeSlider = function updateVolumeSlider() {
-
-			var volume = Math.floor(media.volume * 100);
-
-			volumeSlider.attr({
-				'aria-label': _i18n2.default.t('mejs.volume-slider'),
-				'aria-valuemin': 0,
-				'aria-valuemax': 100,
-				'aria-valuenow': volume,
-				'aria-valuetext': volume + '%',
-				'role': 'slider',
-				'tabindex': -1
-			});
-		};
-
-		// Events
-		volumeSlider.on('mouseover', function () {
+		mute.addEventListener('mouseenter', function (e) {
+			if (e.target === mute) {
+				volumeSlider.style.display = 'block';
+				mouseIsOver = true;
+				e.preventDefault();
+				e.stopPropagation();
+			}
+		});
+		mute.addEventListener('focusin', function () {
+			volumeSlider.style.display = 'block';
 			mouseIsOver = true;
-		}).on('mousedown', function (e) {
-			handleVolumeMove(e);
-			t.globalBind('mousemove.vol', function (e) {
-				handleVolumeMove(e);
-			});
-			t.globalBind('mouseup.vol', function () {
-				mouseIsDown = false;
-				t.globalUnbind('mousemove.vol mouseup.vol');
+		});
 
-				if (!mouseIsOver && mode === 'vertical') {
-					volumeSlider.hide();
-				}
-			});
-			mouseIsDown = true;
-
-			return false;
-		}).on('keydown', function (e) {
-
-			if (t.options.keyActions.length) {
+		mute.addEventListener('focusout', function (e) {
+			if ((!e.relatedTarget || e.relatedTarget && !e.relatedTarget.matches('.' + t.options.classPrefix + 'volume-slider')) && mode === 'vertical') {
+				volumeSlider.style.display = 'none';
+			}
+		});
+		mute.addEventListener('mouseleave', function () {
+			mouseIsOver = false;
+			if (!mouseIsDown && mode === 'vertical') {
+				volumeSlider.style.display = 'none';
+			}
+		});
+		mute.addEventListener('focusout', function () {
+			mouseIsOver = false;
+		});
+		mute.addEventListener('keydown', function (e) {
+			if (t.options.enableKeyboard && t.options.keyActions.length) {
 				var keyCode = e.which || e.keyCode || 0,
 				    volume = media.volume;
+
 				switch (keyCode) {
 					case 38:
-						// Up
 						volume = Math.min(volume + 0.1, 1);
 						break;
 					case 40:
-						// Down
 						volume = Math.max(0, volume - 0.1);
 						break;
 					default:
@@ -3352,200 +3244,191 @@ Object.assign(_player2.default.prototype, {
 				mouseIsDown = false;
 				positionVolumeHandle(volume);
 				media.setVolume(volume);
-				return false;
+
+				e.preventDefault();
+				e.stopPropagation();
 			}
 		});
-
-		// MUTE button
-		mute.find('button').on('click', function () {
+		mute.querySelector('button').addEventListener('click', function () {
 			media.setMuted(!media.muted);
-		}).on('focus', function () {
-			if (mode === 'vertical') {
-				volumeSlider.show();
-			}
-		}).on('blur', function () {
-			if (mode === 'vertical') {
-				volumeSlider.hide();
-			}
+			var event = (0, _general.createEvent)('volumechange', media);
+			media.dispatchEvent(event);
 		});
 
-		// listen for volume change events from other sources
+		volumeSlider.addEventListener('dragstart', function () {
+			return false;
+		});
+
+		volumeSlider.addEventListener('mouseover', function () {
+			mouseIsOver = true;
+		});
+		volumeSlider.addEventListener('focusin', function () {
+			volumeSlider.style.display = 'block';
+			mouseIsOver = true;
+		});
+		volumeSlider.addEventListener('focusout', function () {
+			mouseIsOver = false;
+			if (!mouseIsDown && mode === 'vertical') {
+				volumeSlider.style.display = 'none';
+			}
+		});
+		volumeSlider.addEventListener('mousedown', function (e) {
+			handleVolumeMove(e);
+			t.globalBind('mousemove.vol', function (event) {
+				var target = event.target;
+				if (mouseIsDown && (target === volumeSlider || target.closest(mode === 'vertical' ? '.' + t.options.classPrefix + 'volume-slider' : '.' + t.options.classPrefix + 'horizontal-volume-slider'))) {
+					handleVolumeMove(event);
+				}
+			});
+			t.globalBind('mouseup.vol', function () {
+				mouseIsDown = false;
+				if (!mouseIsOver && mode === 'vertical') {
+					volumeSlider.style.display = 'none';
+				}
+			});
+			mouseIsDown = true;
+			e.preventDefault();
+			e.stopPropagation();
+		});
+
 		media.addEventListener('volumechange', function (e) {
 			if (!mouseIsDown) {
-				if (media.muted) {
-					positionVolumeHandle(0);
-					mute.removeClass(t.options.classPrefix + 'mute').addClass(t.options.classPrefix + 'unmute');
-				} else {
-					positionVolumeHandle(media.volume);
-					mute.removeClass(t.options.classPrefix + 'unmute').addClass(t.options.classPrefix + 'mute');
-				}
+				toggleMute();
 			}
 			updateVolumeSlider(e);
-		}, false);
+		});
 
-		// mutes the media and sets the volume icon muted if the initial volume is set to 0
-		if (player.options.startVolume === 0) {
-			media.setMuted(true);
-		}
-
-		// shim gets the startvolume as a parameter, but we have to set it on the native <video> and <audio> elements
-		var isNative = t.media.rendererName !== null && t.media.rendererName.match(/(native|html5)/) !== null;
-
-		if (isNative) {
-			media.setVolume(player.options.startVolume);
-		}
-
-		t.container.on('controlsresize', function () {
-			if (media.muted) {
-				positionVolumeHandle(0);
-				mute.removeClass(t.options.classPrefix + 'mute').addClass(t.options.classPrefix + 'unmute');
-			} else {
-				positionVolumeHandle(media.volume);
-				mute.removeClass(t.options.classPrefix + 'unmute').addClass(t.options.classPrefix + 'mute');
+		var rendered = false;
+		media.addEventListener('rendererready', function () {
+			if (!modified) {
+				setTimeout(function () {
+					rendered = true;
+					if (player.options.startVolume === 0 || media.originalNode.muted) {
+						media.setMuted(true);
+						player.options.startVolume = 0;
+					}
+					media.setVolume(player.options.startVolume);
+					t.setControlsSize();
+				}, 250);
 			}
+		});
+
+		media.addEventListener('loadedmetadata', function () {
+			setTimeout(function () {
+				if (!modified && !rendered) {
+					if (player.options.startVolume === 0 || media.originalNode.muted) {
+						media.setMuted(true);
+					}
+					media.setVolume(player.options.startVolume);
+					t.setControlsSize();
+				}
+				rendered = false;
+			}, 250);
+		});
+
+		if (player.options.startVolume === 0 || media.originalNode.muted) {
+			media.setMuted(true);
+			player.options.startVolume = 0;
+			toggleMute();
+		}
+
+		t.getElement(t.container).addEventListener('controlsresize', function () {
+			toggleMute();
 		});
 	}
 });
 
-},{"16":16,"23":23,"24":24,"4":4}],14:[function(_dereq_,module,exports){
+},{"16":16,"2":2,"25":25,"26":26,"27":27,"5":5}],15:[function(_dereq_,module,exports){
 'use strict';
-
-/*!
- * This is a `i18n` language object.
- *
- * English; This can serve as a template for other languages to translate
- *
- * @author
- *   TBD
- *   Sascha Greuel (Twitter: @SoftCreatR)
- *
- * @see core/i18n.js
- */
 
 Object.defineProperty(exports, "__esModule", {
 	value: true
 });
 var EN = exports.EN = {
-	"mejs.plural-form": 1,
+	'mejs.plural-form': 1,
 
-	// renderers/flash.js
-	"mejs.install-flash": "You are using a browser that does not have Flash player enabled or installed. Please turn on your Flash player plugin or download the latest version from https://get.adobe.com/flashplayer/",
+	'mejs.download-file': 'Download File',
 
-	// features/fullscreen.js
-	"mejs.fullscreen": "Fullscreen",
+	'mejs.install-flash': 'You are using a browser that does not have Flash player enabled or installed. Please turn on your Flash player plugin or download the latest version from https://get.adobe.com/flashplayer/',
 
-	// features/playpause.js
-	"mejs.play": "Play",
-	"mejs.pause": "Pause",
+	'mejs.fullscreen': 'Fullscreen',
 
-	// features/progress.js
-	"mejs.time-slider": "Time Slider",
-	"mejs.time-help-text": "Use Left/Right Arrow keys to advance one second, Up/Down arrows to advance ten seconds.",
-	"mejs.live-broadcast": "Live Broadcast",
+	'mejs.play': 'Play',
+	'mejs.pause': 'Pause',
 
-	// features/volume.js
-	"mejs.volume-help-text": "Use Up/Down Arrow keys to increase or decrease volume.",
-	"mejs.unmute": "Unmute",
-	"mejs.mute": "Mute",
-	"mejs.volume-slider": "Volume Slider",
+	'mejs.time-slider': 'Time Slider',
+	'mejs.time-help-text': 'Use Left/Right Arrow keys to advance one second, Up/Down arrows to advance ten seconds.',
+	'mejs.live-broadcast': 'Live Broadcast',
 
-	// core/player.js
-	"mejs.video-player": "Video Player",
-	"mejs.audio-player": "Audio Player",
+	'mejs.volume-help-text': 'Use Up/Down Arrow keys to increase or decrease volume.',
+	'mejs.unmute': 'Unmute',
+	'mejs.mute': 'Mute',
+	'mejs.volume-slider': 'Volume Slider',
 
-	// features/tracks.js
-	"mejs.captions-subtitles": "Captions/Subtitles",
-	"mejs.captions-chapters": "Chapters",
-	"mejs.none": "None",
-	"mejs.afrikaans": "Afrikaans",
-	"mejs.albanian": "Albanian",
-	"mejs.arabic": "Arabic",
-	"mejs.belarusian": "Belarusian",
-	"mejs.bulgarian": "Bulgarian",
-	"mejs.catalan": "Catalan",
-	"mejs.chinese": "Chinese",
-	"mejs.chinese-simplified": "Chinese (Simplified)",
-	"mejs.chinese-traditional": "Chinese (Traditional)",
-	"mejs.croatian": "Croatian",
-	"mejs.czech": "Czech",
-	"mejs.danish": "Danish",
-	"mejs.dutch": "Dutch",
-	"mejs.english": "English",
-	"mejs.estonian": "Estonian",
-	"mejs.filipino": "Filipino",
-	"mejs.finnish": "Finnish",
-	"mejs.french": "French",
-	"mejs.galician": "Galician",
-	"mejs.german": "German",
-	"mejs.greek": "Greek",
-	"mejs.haitian-creole": "Haitian Creole",
-	"mejs.hebrew": "Hebrew",
-	"mejs.hindi": "Hindi",
-	"mejs.hungarian": "Hungarian",
-	"mejs.icelandic": "Icelandic",
-	"mejs.indonesian": "Indonesian",
-	"mejs.irish": "Irish",
-	"mejs.italian": "Italian",
-	"mejs.japanese": "Japanese",
-	"mejs.korean": "Korean",
-	"mejs.latvian": "Latvian",
-	"mejs.lithuanian": "Lithuanian",
-	"mejs.macedonian": "Macedonian",
-	"mejs.malay": "Malay",
-	"mejs.maltese": "Maltese",
-	"mejs.norwegian": "Norwegian",
-	"mejs.persian": "Persian",
-	"mejs.polish": "Polish",
-	"mejs.portuguese": "Portuguese",
-	"mejs.romanian": "Romanian",
-	"mejs.russian": "Russian",
-	"mejs.serbian": "Serbian",
-	"mejs.slovak": "Slovak",
-	"mejs.slovenian": "Slovenian",
-	"mejs.spanish": "Spanish",
-	"mejs.swahili": "Swahili",
-	"mejs.swedish": "Swedish",
-	"mejs.tagalog": "Tagalog",
-	"mejs.thai": "Thai",
-	"mejs.turkish": "Turkish",
-	"mejs.ukrainian": "Ukrainian",
-	"mejs.vietnamese": "Vietnamese",
-	"mejs.welsh": "Welsh",
-	"mejs.yiddish": "Yiddish"
+	'mejs.video-player': 'Video Player',
+	'mejs.audio-player': 'Audio Player',
+
+	'mejs.captions-subtitles': 'Captions/Subtitles',
+	'mejs.captions-chapters': 'Chapters',
+	'mejs.none': 'None',
+	'mejs.afrikaans': 'Afrikaans',
+	'mejs.albanian': 'Albanian',
+	'mejs.arabic': 'Arabic',
+	'mejs.belarusian': 'Belarusian',
+	'mejs.bulgarian': 'Bulgarian',
+	'mejs.catalan': 'Catalan',
+	'mejs.chinese': 'Chinese',
+	'mejs.chinese-simplified': 'Chinese (Simplified)',
+	'mejs.chinese-traditional': 'Chinese (Traditional)',
+	'mejs.croatian': 'Croatian',
+	'mejs.czech': 'Czech',
+	'mejs.danish': 'Danish',
+	'mejs.dutch': 'Dutch',
+	'mejs.english': 'English',
+	'mejs.estonian': 'Estonian',
+	'mejs.filipino': 'Filipino',
+	'mejs.finnish': 'Finnish',
+	'mejs.french': 'French',
+	'mejs.galician': 'Galician',
+	'mejs.german': 'German',
+	'mejs.greek': 'Greek',
+	'mejs.haitian-creole': 'Haitian Creole',
+	'mejs.hebrew': 'Hebrew',
+	'mejs.hindi': 'Hindi',
+	'mejs.hungarian': 'Hungarian',
+	'mejs.icelandic': 'Icelandic',
+	'mejs.indonesian': 'Indonesian',
+	'mejs.irish': 'Irish',
+	'mejs.italian': 'Italian',
+	'mejs.japanese': 'Japanese',
+	'mejs.korean': 'Korean',
+	'mejs.latvian': 'Latvian',
+	'mejs.lithuanian': 'Lithuanian',
+	'mejs.macedonian': 'Macedonian',
+	'mejs.malay': 'Malay',
+	'mejs.maltese': 'Maltese',
+	'mejs.norwegian': 'Norwegian',
+	'mejs.persian': 'Persian',
+	'mejs.polish': 'Polish',
+	'mejs.portuguese': 'Portuguese',
+	'mejs.romanian': 'Romanian',
+	'mejs.russian': 'Russian',
+	'mejs.serbian': 'Serbian',
+	'mejs.slovak': 'Slovak',
+	'mejs.slovenian': 'Slovenian',
+	'mejs.spanish': 'Spanish',
+	'mejs.swahili': 'Swahili',
+	'mejs.swedish': 'Swedish',
+	'mejs.tagalog': 'Tagalog',
+	'mejs.thai': 'Thai',
+	'mejs.turkish': 'Turkish',
+	'mejs.ukrainian': 'Ukrainian',
+	'mejs.vietnamese': 'Vietnamese',
+	'mejs.welsh': 'Welsh',
+	'mejs.yiddish': 'Yiddish'
 };
 
-},{}],15:[function(_dereq_,module,exports){
-'use strict';
-
-var _window = _dereq_(3);
-
-var _window2 = _interopRequireDefault(_window);
-
-var _mejs = _dereq_(6);
-
-var _mejs2 = _interopRequireDefault(_mejs);
-
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
-
-if (typeof jQuery !== 'undefined') {
-	_mejs2.default.$ = _window2.default.jQuery = _window2.default.$ = jQuery;
-} else if (typeof Zepto !== 'undefined') {
-	_mejs2.default.$ = _window2.default.Zepto = _window2.default.$ = Zepto;
-
-	// define `outerWidth` method which has not been realized in Zepto
-	Zepto.fn.outerWidth = function (includeMargin) {
-		var width = $(this).width();
-		if (includeMargin) {
-			width += parseInt($(this).css('margin-right'), 10);
-			width += parseInt($(this).css('margin-left'), 10);
-		}
-		return width;
-	};
-} else if (typeof ender !== 'undefined') {
-	_mejs2.default.$ = _window2.default.ender = _window2.default.$ = ender;
-}
-
-},{"3":3,"6":6}],16:[function(_dereq_,module,exports){
+},{}],16:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -3565,25 +3448,35 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _mediaelement = _dereq_(5);
+var _mediaelement = _dereq_(6);
 
 var _mediaelement2 = _interopRequireDefault(_mediaelement);
 
-var _i18n = _dereq_(4);
+var _default = _dereq_(17);
+
+var _default2 = _interopRequireDefault(_default);
+
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _time = _dereq_(27);
+var _time = _dereq_(30);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
+
+var _dom = _dereq_(26);
+
+var dom = _interopRequireWildcard(_dom);
+
+function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
@@ -3593,216 +3486,101 @@ _mejs2.default.mepIndex = 0;
 
 _mejs2.default.players = {};
 
-// default player values
 var config = exports.config = {
-	// url to poster (to fix iOS 3.x)
 	poster: '',
-	// When the video is ended, show the poster.
+
 	showPosterWhenEnded: false,
-	// When the video is paused, show the poster.
+
 	showPosterWhenPaused: false,
-	// Default if the <video width> is not specified
+
 	defaultVideoWidth: 480,
-	// Default if the <video height> is not specified
+
 	defaultVideoHeight: 270,
-	// If set, overrides <video width>
+
 	videoWidth: -1,
-	// If set, overrides <video height>
+
 	videoHeight: -1,
-	// Default if the user doesn't specify
+
 	defaultAudioWidth: 400,
-	// Default if the user doesn't specify
+
 	defaultAudioHeight: 40,
-	// Default amount to move back when back key is pressed
+
 	defaultSeekBackwardInterval: function defaultSeekBackwardInterval(media) {
-		return media.duration * 0.05;
+		return media.getDuration() * 0.05;
 	},
-	// Default amount to move forward when forward key is pressed
+
 	defaultSeekForwardInterval: function defaultSeekForwardInterval(media) {
-		return media.duration * 0.05;
+		return media.getDuration() * 0.05;
 	},
-	// Set dimensions via JS instead of CSS
+
 	setDimensions: true,
-	// Width of audio player
+
 	audioWidth: -1,
-	// Height of audio player
+
 	audioHeight: -1,
-	// Initial volume when the player starts (overridden by user cookie)
-	startVolume: 0.8,
-	// Useful for <audio> player loops
+
 	loop: false,
-	// Rewind to beginning when media ends
+
 	autoRewind: true,
-	// Resize to media dimensions
+
 	enableAutosize: true,
-	/*
-  * Time format to use. Default: 'mm:ss'
-  * Supported units:
-  *   h: hour
-  *   m: minute
-  *   s: second
-  *   f: frame count
-  * When using 'hh', 'mm', 'ss' or 'ff' we always display 2 digits.
-  * If you use 'h', 'm', 's' or 'f' we display 1 digit if possible.
-  *
-  * Example to display 75 seconds:
-  * Format 'mm:ss': 01:15
-  * Format 'm:ss': 1:15
-  * Format 'm:s': 1:15
-  */
+
 	timeFormat: '',
-	// Force the hour marker (##:00:00)
+
 	alwaysShowHours: false,
-	// Show framecount in timecode (##:00:00:00)
+
 	showTimecodeFrameCount: false,
-	// Used when showTimecodeFrameCount is set to true
+
 	framesPerSecond: 25,
-	// Hide controls when playing and mouse is not over the video
+
 	alwaysShowControls: false,
-	// Display the video control when media is loading
+
 	hideVideoControlsOnLoad: false,
-	// Display the video controls when media is paused
+
 	hideVideoControlsOnPause: false,
-	// Enable click video element to toggle play/pause
+
 	clickToPlayPause: true,
-	// Time in ms to hide controls
+
 	controlsTimeoutDefault: 1500,
-	// Time in ms to trigger the timer when mouse moves
+
 	controlsTimeoutMouseEnter: 2500,
-	// Time in ms to trigger the timer when mouse leaves
+
 	controlsTimeoutMouseLeave: 1000,
-	// Force iPad's native controls
+
 	iPadUseNativeControls: false,
-	// Force iPhone's native controls
+
 	iPhoneUseNativeControls: false,
-	// Force Android's native controls
+
 	AndroidUseNativeControls: false,
-	// Features to show
+
 	features: ['playpause', 'current', 'progress', 'duration', 'tracks', 'volume', 'fullscreen'],
-	// Only for dynamic
+
+	useDefaultControls: false,
+
 	isVideo: true,
-	// Stretching modes (auto, fill, responsive, none)
+
 	stretching: 'auto',
-	// Prefix class names on elements
+
 	classPrefix: 'mejs__',
-	// Turn keyboard support on and off for this instance
+
 	enableKeyboard: true,
-	// When this player starts, it will pause other players
+
 	pauseOtherPlayers: true,
-	// Number of decimal places to show if frames are shown
+
 	secondsDecimalLength: 0,
-	// Array of keyboard actions such as play/pause
+
+	customError: null,
+
 	keyActions: [{
-		keys: [32, // SPACE
-		179 // GOOGLE play/pause button
-		],
-		action: function action(player, media) {
-
-			if (!_constants.IS_FIREFOX) {
-				if (media.paused || media.ended) {
-					media.play();
-				} else {
-					media.pause();
-				}
-			}
-		}
-	}, {
-		keys: [38], // UP
-		action: function action(player, media) {
-
-			if (player.container.find('.' + config.classPrefix + 'volume-button>button').is(':focus') || player.container.find('.' + config.classPrefix + 'volume-slider').is(':focus')) {
-				player.container.find('.' + config.classPrefix + 'volume-slider').css('display', 'block');
-			}
-			if (player.isVideo) {
-				player.showControls();
-				player.startControlsTimer();
-			}
-
-			var newVolume = Math.min(media.volume + 0.1, 1);
-			media.setVolume(newVolume);
-			if (newVolume > 0) {
-				media.setMuted(false);
-			}
-		}
-	}, {
-		keys: [40], // DOWN
-		action: function action(player, media) {
-
-			if (player.container.find('.' + config.classPrefix + 'volume-button>button').is(':focus') || player.container.find('.' + config.classPrefix + 'volume-slider').is(':focus')) {
-				player.container.find('.' + config.classPrefix + 'volume-slider').css('display', 'block');
-			}
-
-			if (player.isVideo) {
-				player.showControls();
-				player.startControlsTimer();
-			}
-
-			var newVolume = Math.max(media.volume - 0.1, 0);
-			media.setVolume(newVolume);
-
-			if (newVolume <= 0.1) {
-				media.setMuted(true);
-			}
-		}
-	}, {
-		keys: [37, // LEFT
-		227 // Google TV rewind
-		],
-		action: function action(player, media) {
-			if (!isNaN(media.duration) && media.duration > 0) {
-				if (player.isVideo) {
-					player.showControls();
-					player.startControlsTimer();
-				}
-
-				// 5%
-				var newTime = Math.max(media.currentTime - player.options.defaultSeekBackwardInterval(media), 0);
-				media.setCurrentTime(newTime);
-			}
-		}
-	}, {
-		keys: [39, // RIGHT
-		228 // Google TV forward
-		],
-		action: function action(player, media) {
-
-			if (!isNaN(media.duration) && media.duration > 0) {
-				if (player.isVideo) {
-					player.showControls();
-					player.startControlsTimer();
-				}
-
-				// 5%
-				var newTime = Math.min(media.currentTime + player.options.defaultSeekForwardInterval(media), media.duration);
-				media.setCurrentTime(newTime);
-			}
-		}
-	}, {
-		keys: [70], // F
-		action: function action(player, media, key, event) {
-			if (!event.ctrlKey) {
-				if (typeof player.enterFullScreen !== 'undefined') {
-					if (player.isFullScreen) {
-						player.exitFullScreen();
-					} else {
-						player.enterFullScreen();
-					}
-				}
-			}
-		}
-	}, {
-		keys: [77], // M
+		keys: [32, 179],
 		action: function action(player) {
 
-			player.container.find('.' + config.classPrefix + 'volume-slider').css('display', 'block');
-			if (player.isVideo) {
-				player.showControls();
-				player.startControlsTimer();
-			}
-			if (player.media.muted) {
-				player.setMuted(false);
-			} else {
-				player.setMuted(true);
+			if (!_constants.IS_FIREFOX) {
+				if (player.paused || player.ended) {
+					player.play();
+				} else {
+					player.pause();
+				}
 			}
 		}
 	}]
@@ -3810,24 +3588,25 @@ var config = exports.config = {
 
 _mejs2.default.MepDefaults = config;
 
-/**
- * Wrap a MediaElement object in player controls
- *
- * @constructor
- * @param {HTMLElement|String} node
- * @param {Object} o
- * @return {?MediaElementPlayer}
- */
-
 var MediaElementPlayer = function () {
 	function MediaElementPlayer(node, o) {
 		_classCallCheck(this, MediaElementPlayer);
 
-		var t = this;
+		var t = this,
+		    element = typeof node === 'string' ? _document2.default.getElementById(node) : node;
 
-		// To avoid jQuery.noConflict() issues
-		if (typeof _mejs2.default.$ !== 'undefined') {
-			_window2.default.$ = _mejs2.default.$;
+		if (!(t instanceof MediaElementPlayer)) {
+			return new MediaElementPlayer(element, o);
+		}
+
+		t.node = t.media = element;
+
+		if (!t.node) {
+			return;
+		}
+
+		if (t.media.player) {
+			return t.media.player;
 		}
 
 		t.hasFocus = false;
@@ -3838,36 +3617,25 @@ var MediaElementPlayer = function () {
 
 		t.controlsTimer = null;
 
-		var element = typeof node === 'string' ? _document2.default.getElementById(node) : node;
+		t.currentMediaTime = 0;
 
-		// enforce object, even without "new" (via John Resig)
-		if (!(t instanceof MediaElementPlayer)) {
-			return new MediaElementPlayer(element, o);
-		}
+		t.proxy = null;
 
-		// these will be reset after the MediaElement.success fires
-		t.$media = t.$node = $(element);
-		t.node = t.media = t.$media[0];
-
-		if (!t.node) {
-			return;
-		}
-
-		// check for existing player
-		if (t.node.player !== undefined) {
-			return t.node.player;
-		}
-
-		// try to get options from data-mejsoptions
 		if (o === undefined) {
-			o = t.$node.data('mejsoptions');
+			var options = t.node.getAttribute('data-mejsoptions');
+			o = options ? JSON.parse(options) : {};
 		}
 
-		// extend default options
 		t.options = Object.assign({}, config, o);
 
+		if (t.options.loop && !t.media.getAttribute('loop')) {
+			t.media.loop = true;
+			t.node.loop = true;
+		} else if (t.media.loop) {
+			t.options.loop = true;
+		}
+
 		if (!t.options.timeFormat) {
-			// Generate the time format according to options
 			t.options.timeFormat = 'mm:ss';
 			if (t.options.alwaysShowHours) {
 				t.options.timeFormat = 'hh:mm:ss';
@@ -3879,222 +3647,296 @@ var MediaElementPlayer = function () {
 
 		(0, _time.calculateTimeFormat)(0, t.options, t.options.framesPerSecond || 25);
 
-		// unique ID
 		t.id = 'mep_' + _mejs2.default.mepIndex++;
 
-		// add to player array (for focus events)
 		_mejs2.default.players[t.id] = t;
 
-		// start up
-		var meOptions = Object.assign({}, t.options, {
-			success: function success(media, domNode) {
-				t._meReady(media, domNode);
-			},
-			error: function error(e) {
-				t._handleError(e);
-			}
-		}),
-		    tagName = t.media.tagName.toLowerCase();
-
-		// get video from src or href?
-		t.isDynamic = tagName !== 'audio' && tagName !== 'video';
-		t.isVideo = t.isDynamic ? t.options.isVideo : tagName !== 'audio' && t.options.isVideo;
-
-		// use native controls in iPad, iPhone, and Android
-		if (_constants.IS_IPAD && t.options.iPadUseNativeControls || _constants.IS_IPHONE && t.options.iPhoneUseNativeControls) {
-
-			// add controls and stop
-			t.$media.attr('controls', 'controls');
-
-			// override Apple's autoplay override for iPads
-			if (_constants.IS_IPAD && t.media.getAttribute('autoplay')) {
-				t.play();
-			}
-		} else if (_constants.IS_ANDROID && t.options.AndroidUseNativeControls) {
-
-			// leave default player
-
-		} else if (t.isVideo || !t.isVideo && t.options.features.length) {
-
-			// DESKTOP: use MediaElementPlayer controls
-
-			// remove native controls
-			t.$media.removeAttr('controls');
-			var videoPlayerTitle = t.isVideo ? _i18n2.default.t('mejs.video-player') : _i18n2.default.t('mejs.audio-player');
-			// insert description for screen readers
-			$('<span class="' + t.options.classPrefix + 'offscreen">' + videoPlayerTitle + '</span>').insertBefore(t.$media);
-			// build container
-			t.container = $('<div id="' + t.id + '" class="' + t.options.classPrefix + 'container ' + t.options.classPrefix + 'container-keyboard-inactive"' + ('tabindex="0" role="application" aria-label="' + videoPlayerTitle + '">') + ('<div class="' + t.options.classPrefix + 'inner">') + ('<div class="' + t.options.classPrefix + 'layers"></div>') + ('<div class="' + t.options.classPrefix + 'controls"></div>') + ('<div class="' + t.options.classPrefix + 'mediaelement"></div>') + ('<div class="' + t.options.classPrefix + 'clear"></div>') + '</div>' + '</div>').addClass(t.$media[0].className).insertBefore(t.$media).focus(function (e) {
-				if (!t.controlsAreVisible && !t.hasFocus && t.controlsEnabled) {
-					t.showControls(true);
-					// In versions older than IE11, the focus causes the playbar to be displayed
-					// if user clicks on the Play/Pause button in the control bar once it attempts
-					// to hide it
-					if (!_constants.HAS_MS_NATIVE_FULLSCREEN) {
-						// If e.relatedTarget appears before container, send focus to play button,
-						// else send focus to last control button.
-						var btnSelector = (0, _general.isNodeAfter)(e.relatedTarget, t.container[0]) ? '.' + t.options.classPrefix + 'controls .' + t.options.classPrefix + 'button:last-child > button' : '.' + t.options.classPrefix + 'playpause-button > button',
-						    button = t.container.find(btnSelector);
-
-						button.focus();
-					}
-				}
-			});
-
-			// When no elements in controls, hide bar completely
-			if (!t.options.features.length) {
-				t.container.css('background', 'transparent').find('.' + t.options.classPrefix + 'controls').hide();
-			}
-
-			if (t.isVideo && t.options.stretching === 'fill' && !t.container.parent('.' + t.options.classPrefix + 'fill-container').length) {
-				// outer container
-				t.outerContainer = t.$media.parent();
-				t.container.wrap('<div class="' + t.options.classPrefix + 'fill-container"/>');
-			}
-
-			// add classes for user and content
-			t.container.addClass((_constants.IS_ANDROID ? t.options.classPrefix + 'android ' : '') + (_constants.IS_IOS ? t.options.classPrefix + 'ios ' : '') + (_constants.IS_IPAD ? t.options.classPrefix + 'ipad ' : '') + (_constants.IS_IPHONE ? t.options.classPrefix + 'iphone ' : '') + (t.isVideo ? t.options.classPrefix + 'video ' : t.options.classPrefix + 'audio '));
-
-			// move the <video/video> tag into the right spot
-			t.container.find('.' + t.options.classPrefix + 'mediaelement').append(t.$media);
-
-			// needs to be assigned here, after iOS remap
-			t.node.player = t;
-
-			// find parts
-			t.controls = t.container.find('.' + t.options.classPrefix + 'controls');
-			t.layers = t.container.find('.' + t.options.classPrefix + 'layers');
-
-			// determine the size
-
-			/* size priority:
-    (1) videoWidth (forced),
-    (2) style="width;height;"
-    (3) width attribute,
-    (4) defaultVideoWidth (for unspecified cases)
-    */
-
-			var tagType = t.isVideo ? 'video' : 'audio',
-			    capsTagName = tagType.substring(0, 1).toUpperCase() + tagType.substring(1);
-
-			if (t.options[tagType + 'Width'] > 0 || t.options[tagType + 'Width'].toString().indexOf('%') > -1) {
-				t.width = t.options[tagType + 'Width'];
-			} else if (t.media.style.width !== '' && t.media.style.width !== null) {
-				t.width = t.media.style.width;
-			} else if (t.media.getAttribute('width')) {
-				t.width = t.$media.attr('width');
-			} else {
-				t.width = t.options['default' + capsTagName + 'Width'];
-			}
-
-			if (t.options[tagType + 'Height'] > 0 || t.options[tagType + 'Height'].toString().indexOf('%') > -1) {
-				t.height = t.options[tagType + 'Height'];
-			} else if (t.media.style.height !== '' && t.media.style.height !== null) {
-				t.height = t.media.style.height;
-			} else if (t.$media[0].getAttribute('height')) {
-				t.height = t.$media.attr('height');
-			} else {
-				t.height = t.options['default' + capsTagName + 'Height'];
-			}
-
-			t.initialAspectRatio = t.height >= t.width ? t.width / t.height : t.height / t.width;
-
-			// set the size, while we wait for the plugins to load below
-			t.setPlayerSize(t.width, t.height);
-
-			// create MediaElementShim
-			meOptions.pluginWidth = t.width;
-			meOptions.pluginHeight = t.height;
-		}
-		// Hide media completely for audio that doesn't have any features
-		else if (!t.isVideo && !t.options.features.length) {
-				t.$media.hide();
-			}
-
-		// create MediaElement shim
-		new _mediaelement2.default(t.$media[0], meOptions);
-
-		if (t.container !== undefined && t.options.features.length && t.controlsAreVisible && !t.options.hideVideoControlsOnLoad) {
-			// controls are shown when loaded
-			t.container.trigger('controlsshown');
-		}
+		t.init();
 
 		return t;
 	}
 
 	_createClass(MediaElementPlayer, [{
+		key: 'getElement',
+		value: function getElement(element) {
+			return element;
+		}
+	}, {
+		key: 'init',
+		value: function init() {
+			var t = this,
+			    playerOptions = Object.assign({}, t.options, {
+				success: function success(media, domNode) {
+					t._meReady(media, domNode);
+				},
+				error: function error(e) {
+					t._handleError(e);
+				}
+			}),
+			    tagName = t.node.tagName.toLowerCase();
+
+			t.isDynamic = tagName !== 'audio' && tagName !== 'video' && tagName !== 'iframe';
+			t.isVideo = t.isDynamic ? t.options.isVideo : tagName !== 'audio' && t.options.isVideo;
+			t.mediaFiles = null;
+			t.trackFiles = null;
+
+			if (_constants.IS_IPAD && t.options.iPadUseNativeControls || _constants.IS_IPHONE && t.options.iPhoneUseNativeControls) {
+				t.node.setAttribute('controls', true);
+
+				if (_constants.IS_IPAD && t.node.getAttribute('autoplay')) {
+					t.play();
+				}
+			} else if ((t.isVideo || !t.isVideo && (t.options.features.length || t.options.useDefaultControls)) && !(_constants.IS_ANDROID && t.options.AndroidUseNativeControls)) {
+				t.node.removeAttribute('controls');
+				var videoPlayerTitle = t.isVideo ? _i18n2.default.t('mejs.video-player') : _i18n2.default.t('mejs.audio-player');
+
+				var offscreen = _document2.default.createElement('span');
+				offscreen.className = t.options.classPrefix + 'offscreen';
+				offscreen.innerText = videoPlayerTitle;
+				t.media.parentNode.insertBefore(offscreen, t.media);
+
+				t.container = _document2.default.createElement('div');
+				t.getElement(t.container).id = t.id;
+				t.getElement(t.container).className = t.options.classPrefix + 'container ' + t.options.classPrefix + 'container-keyboard-inactive ' + t.media.className;
+				t.getElement(t.container).tabIndex = 0;
+				t.getElement(t.container).setAttribute('role', 'application');
+				t.getElement(t.container).setAttribute('aria-label', videoPlayerTitle);
+				t.getElement(t.container).innerHTML = '<div class="' + t.options.classPrefix + 'inner">' + ('<div class="' + t.options.classPrefix + 'mediaelement"></div>') + ('<div class="' + t.options.classPrefix + 'layers"></div>') + ('<div class="' + t.options.classPrefix + 'controls"></div>') + '</div>';
+				t.getElement(t.container).addEventListener('focus', function (e) {
+					if (!t.controlsAreVisible && !t.hasFocus && t.controlsEnabled) {
+						t.showControls(true);
+
+						var btnSelector = (0, _general.isNodeAfter)(e.relatedTarget, t.getElement(t.container)) ? '.' + t.options.classPrefix + 'controls .' + t.options.classPrefix + 'button:last-child > button' : '.' + t.options.classPrefix + 'playpause-button > button',
+						    button = t.getElement(t.container).querySelector(btnSelector);
+
+						button.focus();
+					}
+				});
+				t.node.parentNode.insertBefore(t.getElement(t.container), t.node);
+
+				if (!t.options.features.length && !t.options.useDefaultControls) {
+					t.getElement(t.container).style.background = 'transparent';
+					t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'controls').style.display = 'none';
+				}
+
+				if (t.isVideo && t.options.stretching === 'fill' && !dom.hasClass(t.getElement(t.container).parentNode, t.options.classPrefix + 'fill-container')) {
+					t.outerContainer = t.media.parentNode;
+
+					var wrapper = _document2.default.createElement('div');
+					wrapper.className = t.options.classPrefix + 'fill-container';
+					t.getElement(t.container).parentNode.insertBefore(wrapper, t.getElement(t.container));
+					wrapper.appendChild(t.getElement(t.container));
+				}
+
+				if (_constants.IS_ANDROID) {
+					dom.addClass(t.getElement(t.container), t.options.classPrefix + 'android');
+				}
+				if (_constants.IS_IOS) {
+					dom.addClass(t.getElement(t.container), t.options.classPrefix + 'ios');
+				}
+				if (_constants.IS_IPAD) {
+					dom.addClass(t.getElement(t.container), t.options.classPrefix + 'ipad');
+				}
+				if (_constants.IS_IPHONE) {
+					dom.addClass(t.getElement(t.container), t.options.classPrefix + 'iphone');
+				}
+				dom.addClass(t.getElement(t.container), t.isVideo ? t.options.classPrefix + 'video' : t.options.classPrefix + 'audio');
+
+				if (_constants.IS_SAFARI && !_constants.IS_IOS) {
+
+					dom.addClass(t.getElement(t.container), t.options.classPrefix + 'hide-cues');
+
+					var cloneNode = t.node.cloneNode(),
+					    children = t.node.children,
+					    mediaFiles = [],
+					    tracks = [];
+
+					for (var i = 0, total = children.length; i < total; i++) {
+						var childNode = children[i];
+
+						(function () {
+							switch (childNode.tagName.toLowerCase()) {
+								case 'source':
+									var elements = {};
+									Array.prototype.slice.call(childNode.attributes).forEach(function (item) {
+										elements[item.name] = item.value;
+									});
+									elements.type = (0, _media.formatType)(elements.src, elements.type);
+									mediaFiles.push(elements);
+									break;
+								case 'track':
+									childNode.mode = 'hidden';
+									tracks.push(childNode);
+									break;
+								default:
+									cloneNode.appendChild(childNode);
+									break;
+							}
+						})();
+					}
+
+					t.node.remove();
+					t.node = t.media = cloneNode;
+
+					if (mediaFiles.length) {
+						t.mediaFiles = mediaFiles;
+					}
+					if (tracks.length) {
+						t.trackFiles = tracks;
+					}
+				}
+
+				t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'mediaelement').appendChild(t.node);
+
+				t.media.player = t;
+
+				t.controls = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'controls');
+				t.layers = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'layers');
+
+				var tagType = t.isVideo ? 'video' : 'audio',
+				    capsTagName = tagType.substring(0, 1).toUpperCase() + tagType.substring(1);
+
+				if (t.options[tagType + 'Width'] > 0 || t.options[tagType + 'Width'].toString().indexOf('%') > -1) {
+					t.width = t.options[tagType + 'Width'];
+				} else if (t.node.style.width !== '' && t.node.style.width !== null) {
+					t.width = t.node.style.width;
+				} else if (t.node.getAttribute('width')) {
+					t.width = t.node.getAttribute('width');
+				} else {
+					t.width = t.options['default' + capsTagName + 'Width'];
+				}
+
+				if (t.options[tagType + 'Height'] > 0 || t.options[tagType + 'Height'].toString().indexOf('%') > -1) {
+					t.height = t.options[tagType + 'Height'];
+				} else if (t.node.style.height !== '' && t.node.style.height !== null) {
+					t.height = t.node.style.height;
+				} else if (t.node.getAttribute('height')) {
+					t.height = t.node.getAttribute('height');
+				} else {
+					t.height = t.options['default' + capsTagName + 'Height'];
+				}
+
+				t.initialAspectRatio = t.height >= t.width ? t.width / t.height : t.height / t.width;
+
+				t.setPlayerSize(t.width, t.height);
+
+				playerOptions.pluginWidth = t.width;
+				playerOptions.pluginHeight = t.height;
+			} else if (!t.isVideo && !t.options.features.length && !t.options.useDefaultControls) {
+					t.node.style.display = 'none';
+				}
+
+			_mejs2.default.MepDefaults = playerOptions;
+
+			new _mediaelement2.default(t.media, playerOptions, t.mediaFiles);
+
+			if (t.getElement(t.container) !== undefined && t.options.features.length && t.controlsAreVisible && !t.options.hideVideoControlsOnLoad) {
+				var event = (0, _general.createEvent)('controlsshown', t.getElement(t.container));
+				t.getElement(t.container).dispatchEvent(event);
+			}
+		}
+	}, {
 		key: 'showControls',
 		value: function showControls(doAnimation) {
 			var t = this;
 
 			doAnimation = doAnimation === undefined || doAnimation;
 
-			if (t.controlsAreVisible) {
+			if (t.controlsAreVisible || !t.isVideo) {
 				return;
 			}
 
 			if (doAnimation) {
-				t.controls.removeClass(t.options.classPrefix + 'offscreen').stop(true, true).fadeIn(200, function () {
-					t.controlsAreVisible = true;
-					t.container.trigger('controlsshown');
-				});
+				(function () {
+					dom.fadeIn(t.getElement(t.controls), 200, function () {
+						dom.removeClass(t.getElement(t.controls), t.options.classPrefix + 'offscreen');
+						var event = (0, _general.createEvent)('controlsshown', t.getElement(t.container));
+						t.getElement(t.container).dispatchEvent(event);
+					});
 
-				// any additional controls people might add and want to hide
-				t.container.find('.' + t.options.classPrefix + 'control').removeClass(t.options.classPrefix + 'offscreen').stop(true, true).fadeIn(200, function () {
-					t.controlsAreVisible = true;
-				});
+					var controls = t.getElement(t.container).querySelectorAll('.' + t.options.classPrefix + 'control');
+
+					var _loop = function _loop(i, total) {
+						dom.fadeIn(controls[i], 200, function () {
+							dom.removeClass(controls[i], t.options.classPrefix + 'offscreen');
+						});
+					};
+
+					for (var i = 0, total = controls.length; i < total; i++) {
+						_loop(i, total);
+					}
+				})();
 			} else {
-				t.controls.removeClass(t.options.classPrefix + 'offscreen').css('display', 'block');
+				dom.removeClass(t.getElement(t.controls), t.options.classPrefix + 'offscreen');
+				t.getElement(t.controls).style.display = '';
+				t.getElement(t.controls).style.opacity = 1;
 
-				// any additional controls people might add and want to hide
-				t.container.find('.' + t.options.classPrefix + 'control').removeClass(t.options.classPrefix + 'offscreen').css('display', 'block');
+				var controls = t.getElement(t.container).querySelectorAll('.' + t.options.classPrefix + 'control');
+				for (var i = 0, total = controls.length; i < total; i++) {
+					dom.removeClass(controls[i], t.options.classPrefix + 'offscreen');
+					controls[i].style.display = '';
+				}
 
-				t.controlsAreVisible = true;
-				t.container.trigger('controlsshown');
+				var event = (0, _general.createEvent)('controlsshown', t.getElement(t.container));
+				t.getElement(t.container).dispatchEvent(event);
 			}
 
+			t.controlsAreVisible = true;
 			t.setControlsSize();
 		}
 	}, {
 		key: 'hideControls',
-		value: function hideControls(doAnimation) {
+		value: function hideControls(doAnimation, forceHide) {
 			var t = this;
 
 			doAnimation = doAnimation === undefined || doAnimation;
 
-			if (!t.controlsAreVisible || t.options.alwaysShowControls || t.keyboardAction || t.media.paused && t.media.readyState === 4 && (!t.options.hideVideoControlsOnLoad && t.media.currentTime <= 0 || !t.options.hideVideoControlsOnPause && t.media.currentTime > 0) || t.isVideo && !t.options.hideVideoControlsOnLoad && !t.media.readyState || t.media.ended) {
+			if (forceHide !== true && (!t.controlsAreVisible || t.options.alwaysShowControls || t.paused && t.readyState === 4 && (!t.options.hideVideoControlsOnLoad && t.currentTime <= 0 || !t.options.hideVideoControlsOnPause && t.currentTime > 0) || t.isVideo && !t.options.hideVideoControlsOnLoad && !t.readyState || t.ended)) {
 				return;
 			}
 
 			if (doAnimation) {
-				// fade out main controls
-				t.controls.stop(true, true).fadeOut(200, function () {
-					$(this).addClass(t.options.classPrefix + 'offscreen').css('display', 'block');
+				(function () {
+					dom.fadeOut(t.getElement(t.controls), 200, function () {
+						dom.addClass(t.getElement(t.controls), t.options.classPrefix + 'offscreen');
+						t.getElement(t.controls).style.display = '';
+						var event = (0, _general.createEvent)('controlshidden', t.getElement(t.container));
+						t.getElement(t.container).dispatchEvent(event);
+					});
 
-					t.controlsAreVisible = false;
-					t.container.trigger('controlshidden');
-				});
+					var controls = t.getElement(t.container).querySelectorAll('.' + t.options.classPrefix + 'control');
 
-				// any additional controls people might add and want to hide
-				t.container.find('.' + t.options.classPrefix + 'control').stop(true, true).fadeOut(200, function () {
-					$(this).addClass(t.options.classPrefix + 'offscreen').css('display', 'block');
-				});
+					var _loop2 = function _loop2(i, total) {
+						dom.fadeOut(controls[i], 200, function () {
+							dom.addClass(controls[i], t.options.classPrefix + 'offscreen');
+							controls[i].style.display = '';
+						});
+					};
+
+					for (var i = 0, total = controls.length; i < total; i++) {
+						_loop2(i, total);
+					}
+				})();
 			} else {
+				dom.addClass(t.getElement(t.controls), t.options.classPrefix + 'offscreen');
+				t.getElement(t.controls).style.display = '';
+				t.getElement(t.controls).style.opacity = 0;
 
-				// hide main controls
-				t.controls.addClass(t.options.classPrefix + 'offscreen').css('display', 'block');
+				var controls = t.getElement(t.container).querySelectorAll('.' + t.options.classPrefix + 'control');
+				for (var i = 0, total = controls.length; i < total; i++) {
+					dom.addClass(controls[i], t.options.classPrefix + 'offscreen');
+					controls[i].style.display = '';
+				}
 
-				// hide others
-				t.container.find('.' + t.options.classPrefix + 'control').addClass(t.options.classPrefix + 'offscreen').css('display', 'block');
-
-				t.controlsAreVisible = false;
-				t.container.trigger('controlshidden');
+				var event = (0, _general.createEvent)('controlshidden', t.getElement(t.container));
+				t.getElement(t.container).dispatchEvent(event);
 			}
+
+			t.controlsAreVisible = false;
 		}
 	}, {
 		key: 'startControlsTimer',
 		value: function startControlsTimer(timeout) {
-
 			var t = this;
 
 			timeout = typeof timeout !== 'undefined' ? timeout : t.options.controlsTimeoutDefault;
@@ -4109,7 +3951,6 @@ var MediaElementPlayer = function () {
 	}, {
 		key: 'killControlsTimer',
 		value: function killControlsTimer() {
-
 			var t = this;
 
 			if (t.controlsTimer !== null) {
@@ -4124,37 +3965,50 @@ var MediaElementPlayer = function () {
 			var t = this;
 
 			t.killControlsTimer();
-			t.hideControls(false);
-			this.controlsEnabled = false;
+			t.controlsEnabled = false;
+			t.hideControls(false, true);
 		}
 	}, {
 		key: 'enableControls',
 		value: function enableControls() {
 			var t = this;
 
-			t.showControls(false);
-
 			t.controlsEnabled = true;
+			t.showControls(false);
 		}
-
-		/**
-   * Set up all controls and events
-   *
-   * @param media
-   * @param domNode
-   * @private
-   */
-
+	}, {
+		key: '_setDefaultPlayer',
+		value: function _setDefaultPlayer() {
+			var t = this;
+			if (t.proxy) {
+				t.proxy.pause();
+			}
+			t.proxy = new _default2.default(t);
+			t.media.addEventListener('loadedmetadata', function () {
+				if (t.getCurrentTime() > 0 && t.currentMediaTime > 0) {
+					t.setCurrentTime(t.currentMediaTime);
+					if (!_constants.IS_IOS && !_constants.IS_ANDROID) {
+						t.play();
+					}
+				}
+			});
+		}
 	}, {
 		key: '_meReady',
 		value: function _meReady(media, domNode) {
-
 			var t = this,
 			    autoplayAttr = domNode.getAttribute('autoplay'),
 			    autoplay = !(autoplayAttr === undefined || autoplayAttr === null || autoplayAttr === 'false'),
-			    isNative = media.rendererName !== null && media.rendererName.match(/(native|html5)/) !== null;
+			    isNative = media.rendererName !== null && /(native|html5)/i.test(t.media.rendererName);
 
-			// make sure it can't create itself again if a plugin reloads
+			if (t.getElement(t.controls)) {
+				t.enableControls();
+			}
+
+			if (t.getElement(t.container) && t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'overlay-play')) {
+				t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'overlay-play').style.display = '';
+			}
+
 			if (t.created) {
 				return;
 			}
@@ -4164,216 +4018,202 @@ var MediaElementPlayer = function () {
 			t.domNode = domNode;
 
 			if (!(_constants.IS_ANDROID && t.options.AndroidUseNativeControls) && !(_constants.IS_IPAD && t.options.iPadUseNativeControls) && !(_constants.IS_IPHONE && t.options.iPhoneUseNativeControls)) {
-				var _ret = function () {
+				if (!t.isVideo && !t.options.features.length && !t.options.useDefaultControls) {
+					if (autoplay && isNative) {
+						t.play();
+					}
 
-					// In the event that no features are specified for audio,
-					// create only MediaElement instance rather than
-					// doing all the work to create a full player
-					if (!t.isVideo && !t.options.features.length) {
+					if (t.options.success) {
 
-						// force autoplay for HTML5
-						if (autoplay && isNative) {
-							t.play();
+						if (typeof t.options.success === 'string') {
+							_window2.default[t.options.success](t.media, t.domNode, t);
+						} else {
+							t.options.success(t.media, t.domNode, t);
 						}
+					}
 
-						if (t.options.success) {
+					return;
+				}
 
-							if (typeof t.options.success === 'string') {
-								_window2.default[t.options.success](t.media, t.domNode, t);
+				t.featurePosition = {};
+
+				t._setDefaultPlayer();
+
+				t.buildposter(t, t.getElement(t.controls), t.getElement(t.layers), t.media);
+				t.buildkeyboard(t, t.getElement(t.controls), t.getElement(t.layers), t.media);
+				t.buildoverlays(t, t.getElement(t.controls), t.getElement(t.layers), t.media);
+
+				if (t.options.useDefaultControls) {
+					var defaultControls = ['playpause', 'current', 'progress', 'duration', 'tracks', 'volume', 'fullscreen'];
+					t.options.features = defaultControls.concat(t.options.features.filter(function (item) {
+						return defaultControls.indexOf(item) === -1;
+					}));
+				}
+
+				t.buildfeatures(t, t.getElement(t.controls), t.getElement(t.layers), t.media);
+
+				var event = (0, _general.createEvent)('controlsready', t.getElement(t.container));
+				t.getElement(t.container).dispatchEvent(event);
+
+				t.setPlayerSize(t.width, t.height);
+				t.setControlsSize();
+
+				if (t.isVideo) {
+					t.clickToPlayPauseCallback = function () {
+
+						if (t.options.clickToPlayPause) {
+							var button = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'overlay-button'),
+							    pressed = button.getAttribute('aria-pressed');
+
+							if (t.paused && pressed) {
+								t.pause();
+							} else if (t.paused) {
+								t.play();
 							} else {
-								t.options.success(t.media, t.domNode, t);
+								t.pause();
 							}
-						}
 
-						return {
-							v: void 0
-						};
+							button.setAttribute('aria-pressed', !pressed);
+							t.getElement(t.container).focus();
+						}
+					};
+
+					t.createIframeLayer();
+
+					t.media.addEventListener('click', t.clickToPlayPauseCallback);
+
+					if ((_constants.IS_ANDROID || _constants.IS_IOS) && !t.options.alwaysShowControls) {
+						t.node.addEventListener('touchstart', function () {
+							if (t.controlsAreVisible) {
+								t.hideControls(false);
+							} else {
+								if (t.controlsEnabled) {
+									t.showControls(false);
+								}
+							}
+						}, _constants.SUPPORT_PASSIVE_EVENT ? { passive: true } : false);
+					} else {
+						t.getElement(t.container).addEventListener('mouseenter', function () {
+							if (t.controlsEnabled) {
+								if (!t.options.alwaysShowControls) {
+									t.killControlsTimer('enter');
+									t.showControls();
+									t.startControlsTimer(t.options.controlsTimeoutMouseEnter);
+								}
+							}
+						});
+						t.getElement(t.container).addEventListener('mousemove', function () {
+							if (t.controlsEnabled) {
+								if (!t.controlsAreVisible) {
+									t.showControls();
+								}
+								if (!t.options.alwaysShowControls) {
+									t.startControlsTimer(t.options.controlsTimeoutMouseEnter);
+								}
+							}
+						});
+						t.getElement(t.container).addEventListener('mouseleave', function () {
+							if (t.controlsEnabled) {
+								if (!t.paused && !t.options.alwaysShowControls) {
+									t.startControlsTimer(t.options.controlsTimeoutMouseLeave);
+								}
+							}
+						});
 					}
 
-					// two built in features
-					t.buildposter(t, t.controls, t.layers, t.media);
-					t.buildkeyboard(t, t.controls, t.layers, t.media);
-					t.buildoverlays(t, t.controls, t.layers, t.media);
-
-					// grab for use by features
-					t.findTracks();
-
-					// cache container to store control elements' original position
-					t.featurePosition = {};
-
-					// add user-defined features/controls
-					for (var i = 0, total = t.options.features.length; i < total; i++) {
-						var feature = t.options.features[i];
-						if (t['build' + feature]) {
-							try {
-								t['build' + feature](t, t.controls, t.layers, t.media);
-							} catch (e) {
-								// TODO: report control error
-								console.error('error building ' + feature, e);
-							}
-						}
+					if (t.options.hideVideoControlsOnLoad) {
+						t.hideControls(false);
 					}
 
-					t.container.trigger('controlsready');
+					if (t.options.enableAutosize) {
+						t.media.addEventListener('loadedmetadata', function (e) {
+							var target = e !== undefined ? e.detail.target || e.target : t.media;
+							if (t.options.videoHeight <= 0 && !t.domNode.getAttribute('height') && !t.domNode.style.height && target !== null && !isNaN(target.videoHeight)) {
+								t.setPlayerSize(target.videoWidth, target.videoHeight);
+								t.setControlsSize();
+								t.media.setSize(target.videoWidth, target.videoHeight);
+							}
+						});
+					}
+				}
 
-					// reset all layers and controls
-					t.setPlayerSize(t.width, t.height);
-					t.setControlsSize();
+				t.media.addEventListener('play', function () {
+					t.hasFocus = true;
 
-					// controls fade
-					if (t.isVideo) {
+					for (var playerIndex in _mejs2.default.players) {
+						if (_mejs2.default.players.hasOwnProperty(playerIndex)) {
+							var p = _mejs2.default.players[playerIndex];
 
-						if ((_constants.IS_ANDROID || _constants.IS_IOS) && !t.options.alwaysShowControls) {
-
-							// for touch devices (iOS, Android)
-							// show/hide without animation on touch
-
-							t.$media.on('touchstart', function () {
-
-								// toggle controls
-								if (t.controlsAreVisible) {
-									t.hideControls(false);
-								} else {
-									if (t.controlsEnabled) {
-										t.showControls(false);
-									}
-								}
-							});
-						} else {
-
-							t.createIframeLayer();
-
-							// create callback here since it needs access to current
-							// MediaElement object
-							t.clickToPlayPauseCallback = function () {
-
-								if (t.options.clickToPlayPause) {
-									var button = t.$media.closest('.' + t.options.classPrefix + 'container').find('.' + t.options.classPrefix + 'overlay-button'),
-									    pressed = button.attr('aria-pressed');
-
-									if (t.media.paused && pressed) {
-										t.pause();
-									} else if (t.media.paused) {
-										t.play();
-									} else {
-										t.pause();
-									}
-
-									button.attr('aria-pressed', !pressed);
-								}
-							};
-
-							// click to play/pause
-							t.media.addEventListener('click', t.clickToPlayPauseCallback, false);
-
-							// show/hide controls
-							t.container.on('mouseenter', function () {
-								if (t.controlsEnabled) {
-									if (!t.options.alwaysShowControls) {
-										t.killControlsTimer('enter');
-										t.showControls();
-										t.startControlsTimer(t.options.controlsTimeoutMouseEnter);
-									}
-								}
-							}).on('mousemove', function () {
-								if (t.controlsEnabled) {
-									if (!t.controlsAreVisible) {
-										t.showControls();
-									}
-									if (!t.options.alwaysShowControls) {
-										t.startControlsTimer(t.options.controlsTimeoutMouseEnter);
-									}
-								}
-							}).on('mouseleave', function () {
-								if (t.controlsEnabled) {
-									if (!t.media.paused && !t.options.alwaysShowControls) {
-										t.startControlsTimer(t.options.controlsTimeoutMouseLeave);
-									}
-								}
-							});
-						}
-
-						if (t.options.hideVideoControlsOnLoad) {
-							t.hideControls(false);
-						}
-
-						// check for autoplay
-						if (autoplay && !t.options.alwaysShowControls) {
-							t.hideControls();
-						}
-
-						// resizer
-						if (t.options.enableAutosize) {
-							t.media.addEventListener('loadedmetadata', function (e) {
-								// if the <video height> was not set and the options.videoHeight was not set
-								// then resize to the real dimensions
-								if (t.options.videoHeight <= 0 && !t.domNode.getAttribute('height') && e.target !== null && !isNaN(e.target.videoHeight)) {
-									t.setPlayerSize(e.target.videoWidth, e.target.videoHeight);
-									t.setControlsSize();
-									t.media.setSize(e.target.videoWidth, e.target.videoHeight);
-								}
-							}, false);
+							if (p.id !== t.id && t.options.pauseOtherPlayers && !p.paused && !p.ended) {
+								p.pause();
+								p.hasFocus = false;
+							}
 						}
 					}
 
-					// EVENTS
+					if (!(_constants.IS_ANDROID || _constants.IS_IOS) && !t.options.alwaysShowControls && t.isVideo) {
+						t.hideControls();
+					}
+				});
 
-					// FOCUS: when a video starts playing, it takes focus from other players (possibly pausing them)
-					t.media.addEventListener('play', function () {
-						t.hasFocus = true;
+				t.media.addEventListener('ended', function () {
+					if (t.options.autoRewind) {
+						try {
+							t.setCurrentTime(0);
 
-						// go through all other players
-						for (var playerIndex in _mejs2.default.players) {
-							if (_mejs2.default.players.hasOwnProperty(playerIndex)) {
-								var p = _mejs2.default.players[playerIndex];
-
-								if (p.id !== t.id && t.options.pauseOtherPlayers && !p.paused && !p.ended) {
-									p.pause();
-									p.hasFocus = false;
+							setTimeout(function () {
+								var loadingElement = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'overlay-loading');
+								if (loadingElement && loadingElement.parentNode) {
+									loadingElement.parentNode.style.display = 'none';
 								}
-							}
+							}, 20);
+						} catch (exp) {
+							
 						}
-					}, false);
+					}
 
-					// ended for all
-					t.media.addEventListener('ended', function () {
-						if (t.options.autoRewind) {
-							try {
-								t.media.setCurrentTime(0);
-								// Fixing an Android stock browser bug, where "seeked" isn't fired correctly after
-								// ending the video and jumping to the beginning
-								setTimeout(function () {
-									$(t.container).find('.' + t.options.classPrefix + 'overlay-loading').parent().hide();
-								}, 20);
-							} catch (exp) {
-								
-							}
-						}
+					if (typeof t.media.renderer.stop === 'function') {
+						t.media.renderer.stop();
+					} else {
+						t.pause();
+					}
 
-						if (typeof t.media.stop === 'function') {
-							t.media.stop();
-						} else {
-							t.media.pause();
-						}
+					if (t.setProgressRail) {
+						t.setProgressRail();
+					}
+					if (t.setCurrentRail) {
+						t.setCurrentRail();
+					}
 
-						if (t.setProgressRail) {
-							t.setProgressRail();
-						}
-						if (t.setCurrentRail) {
-							t.setCurrentRail();
-						}
+					if (t.options.loop) {
+						t.play();
+					} else if (!t.options.alwaysShowControls && t.controlsEnabled) {
+						t.showControls();
+					}
+				});
 
-						if (t.options.loop) {
-							t.play();
-						} else if (!t.options.alwaysShowControls && t.controlsEnabled) {
-							t.showControls();
-						}
-					}, false);
+				t.media.addEventListener('loadedmetadata', function () {
 
-					// resize on the first play
-					t.media.addEventListener('loadedmetadata', function () {
+					(0, _time.calculateTimeFormat)(t.getDuration(), t.options, t.options.framesPerSecond || 25);
 
-						(0, _time.calculateTimeFormat)(t.duration, t.options, t.options.framesPerSecond || 25);
+					if (t.updateDuration) {
+						t.updateDuration();
+					}
+					if (t.updateCurrent) {
+						t.updateCurrent();
+					}
+
+					if (!t.isFullScreen) {
+						t.setPlayerSize(t.width, t.height);
+						t.setControlsSize();
+					}
+				});
+
+				var duration = null;
+				t.media.addEventListener('timeupdate', function () {
+					if (!isNaN(t.getDuration()) && duration !== t.getDuration()) {
+						duration = t.getDuration();
+						(0, _time.calculateTimeFormat)(duration, t.options, t.options.framesPerSecond || 25);
 
 						if (t.updateDuration) {
 							t.updateDuration();
@@ -4382,102 +4222,57 @@ var MediaElementPlayer = function () {
 							t.updateCurrent();
 						}
 
-						if (!t.isFullScreen) {
-							t.setPlayerSize(t.width, t.height);
-							t.setControlsSize();
-						}
-					}, false);
+						t.setControlsSize();
+					}
+				});
 
-					// Only change the time format when necessary
-					var duration = null;
-					t.media.addEventListener('timeupdate', function () {
-						if (duration !== t.media.duration) {
-							duration = t.media.duration;
-							(0, _time.calculateTimeFormat)(duration, t.options, t.options.framesPerSecond || 25);
+				t.getElement(t.container).addEventListener('click', function (e) {
+					dom.addClass(e.currentTarget, t.options.classPrefix + 'container-keyboard-inactive');
+				});
 
-							// make sure to fill in and resize the controls (e.g., 00:00 => 01:13:15
-							if (t.updateDuration) {
-								t.updateDuration();
-							}
-							if (t.updateCurrent) {
-								t.updateCurrent();
-							}
-							t.setControlsSize();
-						}
-					}, false);
+				t.getElement(t.container).addEventListener('focusin', function (e) {
+					dom.removeClass(e.currentTarget, t.options.classPrefix + 'container-keyboard-inactive');
+					if (t.isVideo && !_constants.IS_ANDROID && !_constants.IS_IOS && t.controlsEnabled && !t.options.alwaysShowControls) {
+						t.killControlsTimer('enter');
+						t.showControls();
+						t.startControlsTimer(t.options.controlsTimeoutMouseEnter);
+					}
+				});
 
-					t.container.on('focusout', (0, _general.debounce)(function () {
-						setTimeout(function () {
-							// Safari triggers focusout multiple times
-							// Firefox does NOT support e.relatedTarget to see which element
-							// just lost focus, so wait to find the next focused element
-
-							var parent = $(_document2.default.activeElement).closest('.' + t.options.classPrefix + 'container');
-							if (t.keyboardAction && !parent.length) {
+				t.getElement(t.container).addEventListener('focusout', function (e) {
+					setTimeout(function () {
+						if (e.relatedTarget) {
+							if (t.keyboardAction && !e.relatedTarget.closest('.' + t.options.classPrefix + 'container')) {
 								t.keyboardAction = false;
-								if (t.isVideo && !t.options.alwaysShowControls) {
-									// focus is outside the control; hide controls
-									t.hideControls(true);
+								if (t.isVideo && !t.options.alwaysShowControls && !t.paused) {
+									t.startControlsTimer(t.options.controlsTimeoutMouseLeave);
 								}
 							}
-						}, 0);
-					}, 100));
+						}
+					}, 0);
+				});
 
-					// webkit has trouble doing this without a delay
-					setTimeout(function () {
+				setTimeout(function () {
+					t.setPlayerSize(t.width, t.height);
+					t.setControlsSize();
+				}, 0);
+
+				t.globalResizeCallback = function () {
+					if (!(t.isFullScreen || _constants.HAS_TRUE_NATIVE_FULLSCREEN && _document2.default.webkitIsFullScreen)) {
 						t.setPlayerSize(t.width, t.height);
-						t.setControlsSize();
-					}, 50);
+					}
 
-					// adjust controls whenever window sizes (used to be in fullscreen only)
-					t.globalBind('resize', function () {
+					t.setControlsSize();
+				};
 
-						// don't resize for fullscreen mode
-						if (!(t.isFullScreen || _constants.HAS_TRUE_NATIVE_FULLSCREEN && _document2.default.webkitIsFullScreen)) {
-							t.setPlayerSize(t.width, t.height);
-						}
-
-						// always adjust controls
-						t.setControlsSize();
-					});
-
-					// Disable focus outline to improve look-and-feel for regular users
-					t.globalBind('click', function (e) {
-						if ($(e.target).is('.' + t.options.classPrefix + 'container')) {
-							$(e.target).addClass(t.options.classPrefix + 'container-keyboard-inactive');
-						} else if ($(e.target).closest('.' + t.options.classPrefix + 'container').length) {
-							$(e.target).closest('.' + t.options.classPrefix + 'container').addClass(t.options.classPrefix + 'container-keyboard-inactive');
-						}
-					});
-
-					// Enable focus outline for Accessibility purposes
-					t.globalBind('keydown', function (e) {
-						if ($(e.target).is('.' + t.options.classPrefix + 'container')) {
-							$(e.target).removeClass(t.options.classPrefix + 'container-keyboard-inactive');
-						} else if ($(e.target).closest('.' + t.options.classPrefix + 'container').length) {
-							$(e.target).closest('.' + t.options.classPrefix + 'container').removeClass(t.options.classPrefix + 'container-keyboard-inactive');
-						}
-					});
-
-					// This is a work-around for a bug in the YouTube iFrame player, which means
-					//	we can't use the play() API for the initial playback on iOS or Android;
-					//	user has to start playback directly by tapping on the iFrame.
-					// if (t.media.rendererName !== null && t.media.rendererName.match(/youtube/) && (IS_IOS || IS_ANDROID)) {
-					// 	t.container.find(`.${t.options.classPrefix}overlay-play`).hide();
-					// 	t.container.find(`.${t.options.classPrefix}poster`).hide();
-					// }
-				}();
-
-				if ((typeof _ret === 'undefined' ? 'undefined' : _typeof(_ret)) === "object") return _ret.v;
+				t.globalBind('resize', t.globalResizeCallback);
 			}
 
-			// force autoplay for HTML5
 			if (autoplay && isNative) {
 				t.play();
 			}
 
 			if (t.options.success) {
-
 				if (typeof t.options.success === 'string') {
 					_window2.default[t.options.success](t.media, t.domNode, t);
 				} else {
@@ -4485,25 +4280,58 @@ var MediaElementPlayer = function () {
 				}
 			}
 		}
-
-		/**
-   *
-   * @param {Event} e
-   * @private
-   */
-
 	}, {
 		key: '_handleError',
-		value: function _handleError(e) {
-			var t = this;
+		value: function _handleError(e, media, node) {
+			var t = this,
+			    play = t.getElement(t.layers).querySelector('.' + t.options.classPrefix + 'overlay-play');
 
-			if (t.controls) {
-				t.disableControls();
+			if (play) {
+				play.style.display = 'none';
 			}
 
-			// Tell user that the file cannot be played
 			if (t.options.error) {
-				t.options.error(e);
+				t.options.error(e, media, node);
+			}
+
+			if (t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'cannotplay')) {
+				t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'cannotplay').remove();
+			}
+
+			var errorContainer = _document2.default.createElement('div');
+			errorContainer.className = t.options.classPrefix + 'cannotplay';
+			errorContainer.style.width = '100%';
+			errorContainer.style.height = '100%';
+
+			var errorContent = typeof t.options.customError === 'function' ? t.options.customError(t.media, t.media.originalNode) : t.options.customError,
+			    imgError = '';
+
+			if (!errorContent) {
+				var poster = t.media.originalNode.getAttribute('poster');
+				if (poster) {
+					imgError = '<img src="' + poster + '" alt="' + _mejs2.default.i18n.t('mejs.download-file') + '">';
+				}
+
+				if (e.message) {
+					errorContent = '<p>' + e.message + '</p>';
+				}
+
+				if (e.urls) {
+					for (var i = 0, total = e.urls.length; i < total; i++) {
+						var url = e.urls[i];
+						errorContent += '<a href="' + url.src + '" data-type="' + url.type + '"><span>' + _mejs2.default.i18n.t('mejs.download-file') + ': ' + url.src + '</span></a>';
+					}
+				}
+			}
+
+			if (errorContent && t.getElement(t.layers).querySelector('.' + t.options.classPrefix + 'overlay-error')) {
+				errorContainer.innerHTML = errorContent;
+				t.getElement(t.layers).querySelector('.' + t.options.classPrefix + 'overlay-error').innerHTML = '' + imgError + errorContainer.outerHTML;
+				t.getElement(t.layers).querySelector('.' + t.options.classPrefix + 'overlay-error').parentNode.style.display = 'block';
+			}
+
+			if (t.controlsEnabled) {
+				t.disableControls();
 			}
 		}
 	}, {
@@ -4523,28 +4351,8 @@ var MediaElementPlayer = function () {
 				t.height = height;
 			}
 
-			if (typeof FB !== 'undefined' && t.isVideo) {
-				FB.Event.subscribe('xfbml.ready', function () {
-					var target = $(t.media).children('.fb-video');
-
-					t.width = target.width();
-					t.height = target.height();
-					t.setDimensions(t.width, t.height);
-					return false;
-				});
-
-				var target = $(t.media).children('.fb-video');
-
-				if (target.length) {
-					t.width = target.width();
-					t.height = target.height();
-				}
-			}
-
-			// check stretching modes
 			switch (t.options.stretching) {
 				case 'fill':
-					// The 'fill' effect only makes sense on video; for audio we will set the dimensions
 					if (t.isVideo) {
 						t.setFillMode();
 					} else {
@@ -4557,7 +4365,7 @@ var MediaElementPlayer = function () {
 				case 'none':
 					t.setDimensions(t.width, t.height);
 					break;
-				// This is the 'auto' mode
+
 				default:
 					if (t.hasFluidMode() === true) {
 						t.setResponsiveMode();
@@ -4572,19 +4380,43 @@ var MediaElementPlayer = function () {
 		value: function hasFluidMode() {
 			var t = this;
 
-			// detect 100% mode - use currentStyle for IE since css() doesn't return percentages
-			return t.height.toString().includes('%') || t.$node.css('max-width') !== 'none' && t.$node.css('max-width') !== t.width || t.$node[0].currentStyle && t.$node[0].currentStyle.maxWidth === '100%';
+			return t.height.toString().indexOf('%') !== -1 || t.node && t.node.style.maxWidth && t.node.style.maxWidth !== 'none' && t.node.style.maxWidth !== t.width || t.node && t.node.currentStyle && t.node.currentStyle.maxWidth === '100%';
 		}
 	}, {
 		key: 'setResponsiveMode',
 		value: function setResponsiveMode() {
 			var t = this,
+			    parent = function () {
+
+				var parentEl = void 0,
+				    el = t.getElement(t.container);
+
+				while (el) {
+					try {
+						if (_constants.IS_FIREFOX && el.tagName.toLowerCase() === 'html' && _window2.default.self !== _window2.default.top && _window2.default.frameElement !== null) {
+							return _window2.default.frameElement;
+						} else {
+							parentEl = el.parentElement;
+						}
+					} catch (e) {
+						parentEl = el.parentElement;
+					}
+
+					if (parentEl && dom.visible(parentEl)) {
+						return parentEl;
+					}
+					el = parentEl;
+				}
+
+				return null;
+			}(),
+			    parentStyles = parent ? getComputedStyle(parent, null) : getComputedStyle(_document2.default.body, null),
 			    nativeWidth = function () {
 				if (t.isVideo) {
-					if (t.media.videoWidth && t.media.videoWidth > 0) {
-						return t.media.videoWidth;
-					} else if (t.media.getAttribute('width')) {
-						return t.media.getAttribute('width');
+					if (t.node.videoWidth && t.node.videoWidth > 0) {
+						return t.node.videoWidth;
+					} else if (t.node.getAttribute('width')) {
+						return t.node.getAttribute('width');
 					} else {
 						return t.options.defaultVideoWidth;
 					}
@@ -4594,10 +4426,10 @@ var MediaElementPlayer = function () {
 			}(),
 			    nativeHeight = function () {
 				if (t.isVideo) {
-					if (t.media.videoHeight && t.media.videoHeight > 0) {
-						return t.media.videoHeight;
-					} else if (t.media.getAttribute('height')) {
-						return t.media.getAttribute('height');
+					if (t.node.videoHeight && t.node.videoHeight > 0) {
+						return t.node.videoHeight;
+					} else if (t.node.getAttribute('height')) {
+						return t.node.getAttribute('height');
 					} else {
 						return t.options.defaultVideoHeight;
 					}
@@ -4611,8 +4443,8 @@ var MediaElementPlayer = function () {
 					return ratio;
 				}
 
-				if (t.media.videoWidth && t.media.videoWidth > 0 && t.media.videoHeight && t.media.videoHeight > 0) {
-					ratio = t.height >= t.width ? t.media.videoWidth / t.media.videoHeight : t.media.videoHeight / t.media.videoWidth;
+				if (t.node.videoWidth && t.node.videoWidth > 0 && t.node.videoHeight && t.node.videoHeight > 0) {
+					ratio = t.height >= t.width ? t.node.videoWidth / t.node.videoHeight : t.node.videoHeight / t.node.videoWidth;
 				} else {
 					ratio = t.initialAspectRatio;
 				}
@@ -4623,177 +4455,204 @@ var MediaElementPlayer = function () {
 
 				return ratio;
 			}(),
-			    parentHeight = t.container.parent().closest(':visible').height();
+			    parentHeight = parseFloat(parentStyles.height);
 
 			var newHeight = void 0,
-			    parentWidth = t.container.parent().closest(':visible').width();
+			    parentWidth = parseFloat(parentStyles.width);
 
 			if (t.isVideo) {
-				// Responsive video is based on width: 100% and height: 100%
 				if (t.height === '100%') {
-					newHeight = parseInt(parentWidth * nativeHeight / nativeWidth, 10);
+					newHeight = parseFloat(parentWidth * nativeHeight / nativeWidth, 10);
 				} else {
-					newHeight = t.height >= t.width ? parseInt(parentWidth / aspectRatio, 10) : parseInt(parentWidth * aspectRatio, 10);
+					newHeight = t.height >= t.width ? parseFloat(parentWidth / aspectRatio, 10) : parseFloat(parentWidth * aspectRatio, 10);
 				}
 			} else {
 				newHeight = nativeHeight;
 			}
 
-			// If we were unable to compute newHeight, get the container height instead
 			if (isNaN(newHeight)) {
 				newHeight = parentHeight;
 			}
 
-			if (t.container.parent().length > 0 && t.container.parent()[0].tagName.toLowerCase() === 'body') {
-				parentWidth = $(_window2.default).width();
-				newHeight = $(_window2.default).height();
+			if (t.getElement(t.container).parentNode.length > 0 && t.getElement(t.container).parentNode.tagName.toLowerCase() === 'body') {
+				parentWidth = _window2.default.innerWidth || _document2.default.documentElement.clientWidth || _document2.default.body.clientWidth;
+				newHeight = _window2.default.innerHeight || _document2.default.documentElement.clientHeight || _document2.default.body.clientHeight;
 			}
 
 			if (newHeight && parentWidth) {
+				t.getElement(t.container).style.width = parentWidth + 'px';
+				t.getElement(t.container).style.height = newHeight + 'px';
 
-				// set outer container size
-				t.container.width(parentWidth).height(newHeight);
+				t.node.style.width = '100%';
+				t.node.style.height = '100%';
 
-				// set native <video> or <audio> and shims
-				t.$media.width('100%').height('100%');
-
-				// if shim is ready, send the size to the embedded plugin
-				if (t.isVideo) {
-					if (t.media.setSize) {
-						t.media.setSize(parentWidth, newHeight);
-					}
+				if (t.isVideo && t.media.setSize) {
+					t.media.setSize(parentWidth, newHeight);
 				}
 
-				// set the layers
-				t.layers.children('.' + t.options.classPrefix + 'layer').width('100%').height('100%');
+				var layerChildren = t.getElement(t.layers).children;
+				for (var i = 0, total = layerChildren.length; i < total; i++) {
+					layerChildren[i].style.width = '100%';
+					layerChildren[i].style.height = '100%';
+				}
 			}
 		}
 	}, {
 		key: 'setFillMode',
 		value: function setFillMode() {
-			var t = this,
-			    parent = t.outerContainer;
+			var t = this;
+			var isIframe = _window2.default.self !== _window2.default.top && _window2.default.frameElement !== null;
+			var parent = function () {
+				var parentEl = void 0,
+				    el = t.getElement(t.container);
 
-			// Remove the responsive attributes in the event they are there
-			if (t.$node.css('height') !== 'none' && t.$node.css('height') !== t.height) {
-				t.$node.css('height', '');
-			}
-			if (t.$node.css('max-width') !== 'none' && t.$node.css('max-width') !== t.width) {
-				t.$node.css('max-width', '');
-			}
+				while (el) {
+					try {
+						if (_constants.IS_FIREFOX && el.tagName.toLowerCase() === 'html' && _window2.default.self !== _window2.default.top && _window2.default.frameElement !== null) {
+							return _window2.default.frameElement;
+						} else {
+							parentEl = el.parentElement;
+						}
+					} catch (e) {
+						parentEl = el.parentElement;
+					}
 
-			if (t.$node.css('max-height') !== 'none' && t.$node.css('max-height') !== t.height) {
-				t.$node.css('max-height', '');
-			}
-
-			if (t.$node[0].currentStyle) {
-				if (t.$node[0].currentStyle.height === '100%') {
-					t.$node[0].currentStyle.height = '';
+					if (parentEl && dom.visible(parentEl)) {
+						return parentEl;
+					}
+					el = parentEl;
 				}
-				if (t.$node[0].currentStyle.maxWidth === '100%') {
-					t.$node[0].currentStyle.maxWidth = '';
+
+				return null;
+			}();
+			var parentStyles = parent ? getComputedStyle(parent, null) : getComputedStyle(_document2.default.body, null);
+
+			if (t.node.style.height !== 'none' && t.node.style.height !== t.height) {
+				t.node.style.height = 'auto';
+			}
+			if (t.node.style.maxWidth !== 'none' && t.node.style.maxWidth !== t.width) {
+				t.node.style.maxWidth = 'none';
+			}
+
+			if (t.node.style.maxHeight !== 'none' && t.node.style.maxHeight !== t.height) {
+				t.node.style.maxHeight = 'none';
+			}
+
+			if (t.node.currentStyle) {
+				if (t.node.currentStyle.height === '100%') {
+					t.node.currentStyle.height = 'auto';
 				}
-				if (t.$node[0].currentStyle.maxHeight === '100%') {
-					t.$node[0].currentStyle.maxHeight = '';
+				if (t.node.currentStyle.maxWidth === '100%') {
+					t.node.currentStyle.maxWidth = 'none';
+				}
+				if (t.node.currentStyle.maxHeight === '100%') {
+					t.node.currentStyle.maxHeight = 'none';
 				}
 			}
 
-			if (!parent.width()) {
-				parent.height(t.$media.width());
+			if (!isIframe && !parseFloat(parentStyles.width)) {
+				parent.style.width = t.media.offsetWidth + 'px';
 			}
 
-			if (!parent.height()) {
-				parent.height(t.$media.height());
+			if (!isIframe && !parseFloat(parentStyles.height)) {
+				parent.style.height = t.media.offsetHeight + 'px';
 			}
 
-			var parentWidth = parent.width(),
-			    parentHeight = parent.height();
+			parentStyles = getComputedStyle(parent);
+
+			var parentWidth = parseFloat(parentStyles.width),
+			    parentHeight = parseFloat(parentStyles.height);
 
 			t.setDimensions('100%', '100%');
 
-			// This prevents an issue when displaying poster
-			t.container.find('.' + t.options.classPrefix + 'poster img').css('display', 'block');
-
-			// calculate new width and height
-			var targetElement = t.container.find('object, embed, iframe, video'),
-			    initHeight = t.height,
-			    initWidth = t.width,
-
-			// scale to the target width
-			scaleX1 = parentWidth,
-			    scaleY1 = initHeight * parentWidth / initWidth,
-
-			// scale to the target height
-			scaleX2 = initWidth * parentHeight / initHeight,
-			    scaleY2 = parentHeight,
-
-			// now figure out which one we should use
-			bScaleOnWidth = scaleX2 > parentWidth === false,
-			    finalWidth = bScaleOnWidth ? Math.floor(scaleX1) : Math.floor(scaleX2),
-			    finalHeight = bScaleOnWidth ? Math.floor(scaleY1) : Math.floor(scaleY2);
-
-			if (bScaleOnWidth) {
-				targetElement.height(finalHeight).width(parentWidth);
-				if (t.media.setSize) {
-					t.media.setSize(parentWidth, finalHeight);
-				}
-			} else {
-				targetElement.height(parentHeight).width(finalWidth);
-				if (t.media.setSize) {
-					t.media.setSize(finalWidth, parentHeight);
-				}
+			var poster = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'poster>img');
+			if (poster) {
+				poster.style.display = '';
 			}
 
-			targetElement.css({
-				'margin-left': Math.floor((parentWidth - finalWidth) / 2),
-				'margin-top': 0
-			});
+			var targetElement = t.getElement(t.container).querySelectorAll('object, embed, iframe, video'),
+			    initHeight = t.height,
+			    initWidth = t.width,
+			    scaleX1 = parentWidth,
+			    scaleY1 = initHeight * parentWidth / initWidth,
+			    scaleX2 = initWidth * parentHeight / initHeight,
+			    scaleY2 = parentHeight,
+			    bScaleOnWidth = scaleX2 > parentWidth === false,
+			    finalWidth = bScaleOnWidth ? Math.floor(scaleX1) : Math.floor(scaleX2),
+			    finalHeight = bScaleOnWidth ? Math.floor(scaleY1) : Math.floor(scaleY2),
+			    width = bScaleOnWidth ? parentWidth + 'px' : finalWidth + 'px',
+			    height = bScaleOnWidth ? finalHeight + 'px' : parentHeight + 'px';
+
+			for (var i = 0, total = targetElement.length; i < total; i++) {
+				targetElement[i].style.height = height;
+				targetElement[i].style.width = width;
+				if (t.media.setSize) {
+					t.media.setSize(width, height);
+				}
+
+				targetElement[i].style.marginLeft = Math.floor((parentWidth - finalWidth) / 2) + 'px';
+				targetElement[i].style.marginTop = 0;
+			}
 		}
 	}, {
 		key: 'setDimensions',
 		value: function setDimensions(width, height) {
 			var t = this;
 
-			t.container.width(width).height(height);
+			width = (0, _general.isString)(width) && width.indexOf('%') > -1 ? width : parseFloat(width) + 'px';
+			height = (0, _general.isString)(height) && height.indexOf('%') > -1 ? height : parseFloat(height) + 'px';
 
-			t.layers.children('.' + t.options.classPrefix + 'layer').width(width).height(height);
+			t.getElement(t.container).style.width = width;
+			t.getElement(t.container).style.height = height;
+
+			var layers = t.getElement(t.layers).children;
+			for (var i = 0, total = layers.length; i < total; i++) {
+				layers[i].style.width = width;
+				layers[i].style.height = height;
+			}
 		}
 	}, {
 		key: 'setControlsSize',
 		value: function setControlsSize() {
 			var t = this;
 
-			// skip calculation if hidden
-			if (!t.container.is(':visible') || !t.rail || !t.rail.length || !t.rail.is(':visible')) {
+			if (!dom.visible(t.getElement(t.container))) {
 				return;
 			}
 
-			var railMargin = parseFloat(t.rail.css('margin-left')) + parseFloat(t.rail.css('margin-right')),
-			    totalMargin = parseFloat(t.total.css('margin-left')) + parseFloat(t.total.css('margin-right')) || 0;
+			if (t.rail && dom.visible(t.rail)) {
+				var totalStyles = t.total ? getComputedStyle(t.total, null) : null,
+				    totalMargin = totalStyles ? parseFloat(totalStyles.marginLeft) + parseFloat(totalStyles.marginRight) : 0,
+				    railStyles = getComputedStyle(t.rail),
+				    railMargin = parseFloat(railStyles.marginLeft) + parseFloat(railStyles.marginRight);
 
-			var siblingsWidth = 0;
+				var siblingsWidth = 0;
 
-			t.rail.siblings().each(function (index, object) {
-				if ($(object).is(':visible')) {
-					siblingsWidth += parseFloat($(object).outerWidth(true));
+				var siblings = dom.siblings(t.rail, function (el) {
+					return el !== t.rail;
+				}),
+				    total = siblings.length;
+				for (var i = 0; i < total; i++) {
+					siblingsWidth += siblings[i].offsetWidth;
 				}
-			});
 
-			siblingsWidth += totalMargin + railMargin + 1;
+				siblingsWidth += totalMargin + (totalMargin === 0 ? railMargin * 2 : railMargin) + 1;
 
-			// Substract the width of the feature siblings from time rail
-			t.rail.width(t.controls.width() - siblingsWidth);
+				t.getElement(t.container).style.minWidth = siblingsWidth + 'px';
 
-			t.container.trigger('controlsresize');
+				var event = (0, _general.createEvent)('controlsresize', t.getElement(t.container));
+				t.getElement(t.container).dispatchEvent(event);
+			} else {
+				var children = t.getElement(t.controls).children;
+				var minWidth = 0;
+
+				for (var _i = 0, _total = children.length; _i < _total; _i++) {
+					minWidth += children[_i].offsetWidth;
+				}
+
+				t.getElement(t.container).style.minWidth = minWidth + 'px';
+			}
 		}
-
-		/**
-   * Add featured control element and cache its position in case features are reset
-   *
-   * @param {HTMLElement} element
-   * @param {String} key
-   */
-
 	}, {
 		key: 'addControlElement',
 		value: function addControlElement(element, key) {
@@ -4801,46 +4660,52 @@ var MediaElementPlayer = function () {
 			var t = this;
 
 			if (t.featurePosition[key] !== undefined) {
-				element.insertAfter(t.controls.children(':eq(' + (t.featurePosition[key] - 1) + ')'));
+				var child = t.getElement(t.controls).children[t.featurePosition[key] - 1];
+				child.parentNode.insertBefore(element, child.nextSibling);
 			} else {
-				element.appendTo(t.controls);
-				t.featurePosition[key] = t.controls.find(element).index();
+				t.getElement(t.controls).appendChild(element);
+				var children = t.getElement(t.controls).children;
+				for (var i = 0, total = children.length; i < total; i++) {
+					if (element === children[i]) {
+						t.featurePosition[key] = i;
+						break;
+					}
+				}
 			}
 		}
-
-		/**
-   * Append layer to manipulate `<iframe>` elements safely.
-   *
-   * This allows the user to trigger events properly given that mouse/click don't get lost in the `<iframe>`.
-   */
-
 	}, {
 		key: 'createIframeLayer',
 		value: function createIframeLayer() {
-
 			var t = this;
 
-			if (t.isVideo && t.media.rendererName !== null && t.media.rendererName.match(/iframe/i) !== null && !t.container.find('#' + t.media.id + '-iframe-overlay').length) {
+			if (t.isVideo && t.media.rendererName !== null && t.media.rendererName.indexOf('iframe') > -1 && !_document2.default.getElementById(t.media.id + '-iframe-overlay')) {
 
-				$('<div id="' + t.media.id + '-iframe-overlay" class="' + t.options.classPrefix + 'iframe-overlay"></div>').insertBefore($('#' + t.media.id + '_' + t.media.rendererName)).on('click', function (e) {
+				var layer = _document2.default.createElement('div'),
+				    target = _document2.default.getElementById(t.media.id + '_' + t.media.rendererName);
+
+				layer.id = t.media.id + '-iframe-overlay';
+				layer.className = t.options.classPrefix + 'iframe-overlay';
+				layer.addEventListener('click', function (e) {
 					if (t.options.clickToPlayPause) {
-						if (t.media.paused) {
-							t.media.play();
+						if (t.paused) {
+							t.play();
 						} else {
-							t.media.pause();
+							t.pause();
 						}
 
 						e.preventDefault();
 						e.stopPropagation();
 					}
 				});
+
+				target.parentNode.insertBefore(layer, target);
 			}
 		}
 	}, {
 		key: 'resetSize',
 		value: function resetSize() {
 			var t = this;
-			// webkit has trouble doing this without a delay
+
 			setTimeout(function () {
 				t.setPlayerSize(t.width, t.height);
 				t.setControlsSize();
@@ -4849,103 +4714,170 @@ var MediaElementPlayer = function () {
 	}, {
 		key: 'setPoster',
 		value: function setPoster(url) {
-			var t = this,
-			    posterDiv = t.container.find('.' + t.options.classPrefix + 'poster');
+			var t = this;
 
-			var posterImg = posterDiv.find('img');
+			if (t.getElement(t.container)) {
+				var posterDiv = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'poster');
 
-			if (posterImg.length === 0) {
-				posterImg = $('<img class="' + t.options.classPrefix + 'poster-img" width="100%" height="100%" alt="" />').appendTo(posterDiv);
+				if (!posterDiv) {
+					posterDiv = _document2.default.createElement('div');
+					posterDiv.className = t.options.classPrefix + 'poster ' + t.options.classPrefix + 'layer';
+					t.getElement(t.layers).appendChild(posterDiv);
+				}
+
+				var posterImg = posterDiv.querySelector('img');
+
+				if (!posterImg && url) {
+					posterImg = _document2.default.createElement('img');
+					posterImg.className = t.options.classPrefix + 'poster-img';
+					posterImg.width = '100%';
+					posterImg.height = '100%';
+					posterDiv.style.display = '';
+					posterDiv.appendChild(posterImg);
+				}
+
+				if (url) {
+					posterImg.setAttribute('src', url);
+					posterDiv.style.backgroundImage = 'url("' + url + '")';
+					posterDiv.style.display = '';
+				} else if (posterImg) {
+					posterDiv.style.backgroundImage = 'none';
+					posterDiv.style.display = 'none';
+					posterImg.remove();
+				} else {
+					posterDiv.style.display = 'none';
+				}
+			} else if (_constants.IS_IPAD && t.options.iPadUseNativeControls || _constants.IS_IPHONE && t.options.iPhoneUseNativeControls || _constants.IS_ANDROID && t.options.AndroidUseNativeControls) {
+				t.media.originalNode.poster = url;
 			}
-
-			posterImg.attr('src', url);
-			posterDiv.css({ 'background-image': 'url("' + url + '")' });
 		}
 	}, {
 		key: 'changeSkin',
 		value: function changeSkin(className) {
 			var t = this;
 
-			t.container[0].className = t.options.classPrefix + 'container ' + className;
+			t.getElement(t.container).className = t.options.classPrefix + 'container ' + className;
 			t.setPlayerSize(t.width, t.height);
 			t.setControlsSize();
 		}
 	}, {
 		key: 'globalBind',
-		value: function globalBind(events, data, callback) {
+		value: function globalBind(events, callback) {
 			var t = this,
 			    doc = t.node ? t.node.ownerDocument : _document2.default;
 
 			events = (0, _general.splitEvents)(events, t.id);
 			if (events.d) {
-				$(doc).on(events.d, data, callback);
+				var eventList = events.d.split(' ');
+				for (var i = 0, total = eventList.length; i < total; i++) {
+					eventList[i].split('.').reduce(function (part, e) {
+						doc.addEventListener(e, callback, false);
+						return e;
+					}, '');
+				}
 			}
 			if (events.w) {
-				$(_window2.default).on(events.w, data, callback);
+				var _eventList = events.w.split(' ');
+				for (var _i2 = 0, _total2 = _eventList.length; _i2 < _total2; _i2++) {
+					_eventList[_i2].split('.').reduce(function (part, e) {
+						_window2.default.addEventListener(e, callback, false);
+						return e;
+					}, '');
+				}
 			}
 		}
 	}, {
 		key: 'globalUnbind',
 		value: function globalUnbind(events, callback) {
-
 			var t = this,
 			    doc = t.node ? t.node.ownerDocument : _document2.default;
 
 			events = (0, _general.splitEvents)(events, t.id);
 			if (events.d) {
-				$(doc).off(events.d, callback);
+				var eventList = events.d.split(' ');
+				for (var i = 0, total = eventList.length; i < total; i++) {
+					eventList[i].split('.').reduce(function (part, e) {
+						doc.removeEventListener(e, callback, false);
+						return e;
+					}, '');
+				}
 			}
 			if (events.w) {
-				$(_window2.default).off(events.w, callback);
+				var _eventList2 = events.w.split(' ');
+				for (var _i3 = 0, _total3 = _eventList2.length; _i3 < _total3; _i3++) {
+					_eventList2[_i3].split('.').reduce(function (part, e) {
+						_window2.default.removeEventListener(e, callback, false);
+						return e;
+					}, '');
+				}
+			}
+		}
+	}, {
+		key: 'buildfeatures',
+		value: function buildfeatures(player, controls, layers, media) {
+			var t = this;
+
+			for (var i = 0, total = t.options.features.length; i < total; i++) {
+				var feature = t.options.features[i];
+				if (t['build' + feature]) {
+					try {
+						t['build' + feature](player, controls, layers, media);
+					} catch (e) {
+						console.error('error building ' + feature, e);
+					}
+				}
 			}
 		}
 	}, {
 		key: 'buildposter',
 		value: function buildposter(player, controls, layers, media) {
-
 			var t = this,
-			    poster = $('<div class="' + t.options.classPrefix + 'poster ' + t.options.classPrefix + 'layer"></div>').appendTo(layers);
+			    poster = _document2.default.createElement('div');
 
-			var posterUrl = player.$media.attr('poster');
+			poster.className = t.options.classPrefix + 'poster ' + t.options.classPrefix + 'layer';
+			layers.appendChild(poster);
 
-			// priority goes to option (this is useful if you need to support iOS 3.x (iOS completely fails with poster)
+			var posterUrl = media.originalNode.getAttribute('poster');
+
 			if (player.options.poster !== '') {
+				if (posterUrl && _constants.IS_IOS) {
+					media.originalNode.removeAttribute('poster');
+				}
 				posterUrl = player.options.poster;
 			}
 
-			// second, try the real poster
 			if (posterUrl) {
 				t.setPoster(posterUrl);
+			} else if (t.media.renderer !== null && typeof t.media.renderer.getPosterUrl === 'function') {
+				t.setPoster(t.media.renderer.getPosterUrl());
 			} else {
-				poster.hide();
+				poster.style.display = 'none';
 			}
 
 			media.addEventListener('play', function () {
-				poster.hide();
-			}, false);
+				poster.style.display = 'none';
+			});
 
 			media.addEventListener('playing', function () {
-				poster.hide();
-			}, false);
+				poster.style.display = 'none';
+			});
 
 			if (player.options.showPosterWhenEnded && player.options.autoRewind) {
 				media.addEventListener('ended', function () {
-					poster.show();
-				}, false);
+					poster.style.display = '';
+				});
 			}
 
 			media.addEventListener('error', function () {
-				poster.hide();
-			}, false);
+				poster.style.display = 'none';
+			});
 
 			if (player.options.showPosterWhenPaused) {
 				media.addEventListener('pause', function () {
-					// To avoid displaying the poster when video ended, since it
-					// triggers a pause event as well
-					if (!media.ended) {
-						poster.show();
+					if (!player.ended) {
+						poster.style.display = '';
 					}
-				}, false);
+				});
 			}
 		}
 	}, {
@@ -4957,78 +4889,94 @@ var MediaElementPlayer = function () {
 			}
 
 			var t = this,
-			    loading = $('<div class="' + t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer">' + ('<div class="' + t.options.classPrefix + 'overlay-loading">') + ('<span class="' + t.options.classPrefix + 'overlay-loading-bg-img"></span>') + '</div>' + '</div>').hide() // start out hidden
-			.appendTo(layers),
-			    error = $('<div class="' + t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer">' + ('<div class="' + t.options.classPrefix + 'overlay-error"></div>') + '</div>').hide() // start out hidden
-			.appendTo(layers),
+			    loading = _document2.default.createElement('div'),
+			    error = _document2.default.createElement('div'),
+			    bigPlay = _document2.default.createElement('div');
 
-			// this needs to come last so it's on top
-			bigPlay = $('<div class="' + t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer ' + t.options.classPrefix + 'overlay-play">' + ('<div class="' + t.options.classPrefix + 'overlay-button" role="button" tabindex="0"') + ('aria-label="' + _i18n2.default.t('mejs.play') + '" aria-pressed="false"></div>') + '</div>').appendTo(layers).on('click', function () {
-				// Removed 'touchstart' due issues on Samsung Android devices where a tap on bigPlay
-				// started and immediately stopped the video
+			loading.style.display = 'none';
+			loading.className = t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer';
+			loading.innerHTML = '<div class="' + t.options.classPrefix + 'overlay-loading">' + ('<span class="' + t.options.classPrefix + 'overlay-loading-bg-img"></span>') + '</div>';
+			layers.appendChild(loading);
+
+			error.style.display = 'none';
+			error.className = t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer';
+			error.innerHTML = '<div class="' + t.options.classPrefix + 'overlay-error"></div>';
+			layers.appendChild(error);
+
+			bigPlay.className = t.options.classPrefix + 'overlay ' + t.options.classPrefix + 'layer ' + t.options.classPrefix + 'overlay-play';
+			bigPlay.innerHTML = '<div class="' + t.options.classPrefix + 'overlay-button" role="button" tabindex="0" ' + ('aria-label="' + _i18n2.default.t('mejs.play') + '" aria-pressed="false"></div>');
+			bigPlay.addEventListener('click', function () {
 				if (t.options.clickToPlayPause) {
 
-					var button = t.$media.closest('.' + t.options.classPrefix + 'container').find('.' + t.options.classPrefix + 'overlay-button'),
-					    pressed = button.attr('aria-pressed');
+					var button = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'overlay-button'),
+					    pressed = button.getAttribute('aria-pressed');
 
-					if (media.paused) {
-						media.play();
+					if (t.paused) {
+						t.play();
 					} else {
-						media.pause();
+						t.pause();
 					}
 
-					button.attr('aria-pressed', !!pressed);
+					button.setAttribute('aria-pressed', !!pressed);
+					t.getElement(t.container).focus();
 				}
 			});
 
-			// if (t.options.supportVR || (t.media.rendererName !== null && t.media.rendererName.match(/(youtube|facebook)/))) {
-			if (t.media.rendererName !== null && (t.media.rendererName.match(/(youtube|facebook)/) && !(player.$media.attr('poster') || player.options.poster) || _constants.IS_STOCK_ANDROID)) {
-				bigPlay.hide();
+			bigPlay.addEventListener('keydown', function (e) {
+				var keyPressed = e.keyCode || e.which || 0;
+
+				if (keyPressed === 13 || _constants.IS_FIREFOX && keyPressed === 32) {
+					var event = (0, _general.createEvent)('click', bigPlay);
+					bigPlay.dispatchEvent(event);
+					return false;
+				}
+			});
+
+			layers.appendChild(bigPlay);
+
+			if (t.media.rendererName !== null && (/(youtube|facebook)/i.test(t.media.rendererName) && !(t.media.originalNode.getAttribute('poster') || player.options.poster || typeof t.media.renderer.getPosterUrl === 'function' && t.media.renderer.getPosterUrl()) || _constants.IS_STOCK_ANDROID || t.media.originalNode.getAttribute('autoplay'))) {
+				bigPlay.style.display = 'none';
 			}
 
-			// show/hide big play button
+			var hasError = false;
+
 			media.addEventListener('play', function () {
-				bigPlay.hide();
-				loading.hide();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').hide();
-				error.hide();
-			}, false);
-
+				bigPlay.style.display = 'none';
+				loading.style.display = 'none';
+				error.style.display = 'none';
+				hasError = false;
+			});
 			media.addEventListener('playing', function () {
-				bigPlay.hide();
-				loading.hide();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').hide();
-				error.hide();
-			}, false);
-
+				bigPlay.style.display = 'none';
+				loading.style.display = 'none';
+				error.style.display = 'none';
+				hasError = false;
+			});
 			media.addEventListener('seeking', function () {
-				loading.show();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').show();
-			}, false);
-
+				bigPlay.style.display = 'none';
+				loading.style.display = '';
+				hasError = false;
+			});
 			media.addEventListener('seeked', function () {
-				loading.hide();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').hide();
-			}, false);
-
+				bigPlay.style.display = t.paused && !_constants.IS_STOCK_ANDROID ? '' : 'none';
+				loading.style.display = 'none';
+				hasError = false;
+			});
 			media.addEventListener('pause', function () {
-				if (!_constants.IS_STOCK_ANDROID) {
-					bigPlay.show();
+				loading.style.display = 'none';
+				if (!_constants.IS_STOCK_ANDROID && !hasError) {
+					bigPlay.style.display = '';
 				}
-			}, false);
-
+				hasError = false;
+			});
 			media.addEventListener('waiting', function () {
-				loading.show();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').show();
-			}, false);
+				loading.style.display = '';
+				hasError = false;
+			});
 
-			// show/hide loading
 			media.addEventListener('loadeddata', function () {
-				loading.show();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').show();
+				loading.style.display = '';
 
-				// Firing the 'canplay' event after a timeout which isn't getting fired on some Android 4.1 devices
-				// (https://github.com/johndyer/mediaelement/issues/1305)
 				if (_constants.IS_ANDROID) {
 					media.canplayTimeout = setTimeout(function () {
 						if (_document2.default.createEvent) {
@@ -5038,26 +4986,32 @@ var MediaElementPlayer = function () {
 						}
 					}, 300);
 				}
-			}, false);
+				hasError = false;
+			});
 			media.addEventListener('canplay', function () {
-				loading.hide();
-				controls.find('.' + t.options.classPrefix + 'time-buffering').hide();
-				// Clear timeout inside 'loadeddata' to prevent 'canplay' from firing twice
-				clearTimeout(media.canplayTimeout);
-			}, false);
+				loading.style.display = 'none';
 
-			// error handling
+				clearTimeout(media.canplayTimeout);
+				hasError = false;
+			});
+
 			media.addEventListener('error', function (e) {
-				t._handleError(e);
-				loading.hide();
-				bigPlay.hide();
-				error.show();
-				error.find('.' + t.options.classPrefix + 'overlay-error').html(e.message);
-			}, false);
+				t._handleError(e, t.media, t.node);
+				loading.style.display = 'none';
+				bigPlay.style.display = 'none';
+				hasError = true;
+			});
+
+			media.addEventListener('loadedmetadata', function () {
+				if (!t.controlsEnabled) {
+					t.enableControls();
+				}
+			});
 
 			media.addEventListener('keydown', function (e) {
 				t.onkeydown(player, media, e);
-			}, false);
+				hasError = false;
+			});
 		}
 	}, {
 		key: 'buildkeyboard',
@@ -5065,35 +5019,39 @@ var MediaElementPlayer = function () {
 
 			var t = this;
 
-			t.container.keydown(function () {
+			t.getElement(t.container).addEventListener('keydown', function () {
 				t.keyboardAction = true;
 			});
 
-			// listen for key presses
-			t.globalBind('keydown', function (event) {
-				var $container = $(event.target).closest('.' + t.options.classPrefix + 'container');
-				player.hasFocus = $container.length !== 0 && $container.attr('id') === player.$media.closest('.' + t.options.classPrefix + 'container').attr('id');
+			t.globalKeydownCallback = function (event) {
+				var container = _document2.default.activeElement.closest('.' + t.options.classPrefix + 'container'),
+				    target = t.media.closest('.' + t.options.classPrefix + 'container');
+				t.hasFocus = !!(container && target && container.id === target.id);
 				return t.onkeydown(player, media, event);
-			});
+			};
 
-			// check if someone clicked outside a player region, then kill its focus
-			t.globalBind('click', function (event) {
-				player.hasFocus = $(event.target).closest('.' + t.options.classPrefix + 'container').length !== 0;
-			});
+			t.globalClickCallback = function (event) {
+				t.hasFocus = !!event.target.closest('.' + t.options.classPrefix + 'container');
+			};
+
+			t.globalBind('keydown', t.globalKeydownCallback);
+
+			t.globalBind('click', t.globalClickCallback);
 		}
 	}, {
 		key: 'onkeydown',
 		value: function onkeydown(player, media, e) {
 
 			if (player.hasFocus && player.options.enableKeyboard) {
-				// find a matching key
 				for (var i = 0, total = player.options.keyActions.length; i < total; i++) {
 					var keyAction = player.options.keyActions[i];
 
 					for (var j = 0, jl = keyAction.keys.length; j < jl; j++) {
 						if (e.keyCode === keyAction.keys[j]) {
 							keyAction.action(player, media, e.keyCode, e);
-							return false;
+							e.preventDefault();
+							e.stopPropagation();
+							return;
 						}
 					}
 				}
@@ -5104,22 +5062,292 @@ var MediaElementPlayer = function () {
 	}, {
 		key: 'play',
 		value: function play() {
-			var t = this;
-
-			// only load if the current time is 0 to ensure proper playing
-			if (t.media.getCurrentTime() <= 0) {
-				t.load();
-			}
-			t.media.play();
+			this.proxy.play();
 		}
 	}, {
 		key: 'pause',
 		value: function pause() {
-			try {
-				this.media.pause();
-			} catch (e) {
-				
+			this.proxy.pause();
+		}
+	}, {
+		key: 'load',
+		value: function load() {
+			this.proxy.load();
+		}
+	}, {
+		key: 'setCurrentTime',
+		value: function setCurrentTime(time) {
+			this.proxy.setCurrentTime(time);
+		}
+	}, {
+		key: 'getCurrentTime',
+		value: function getCurrentTime() {
+			return this.proxy.currentTime;
+		}
+	}, {
+		key: 'getDuration',
+		value: function getDuration() {
+			return this.proxy.duration;
+		}
+	}, {
+		key: 'setVolume',
+		value: function setVolume(volume) {
+			this.proxy.volume = volume;
+		}
+	}, {
+		key: 'getVolume',
+		value: function getVolume() {
+			return this.proxy.getVolume();
+		}
+	}, {
+		key: 'setMuted',
+		value: function setMuted(value) {
+			this.proxy.setMuted(value);
+		}
+	}, {
+		key: 'setSrc',
+		value: function setSrc(src) {
+			if (!this.controlsEnabled) {
+				this.enableControls();
 			}
+			this.proxy.setSrc(src);
+		}
+	}, {
+		key: 'getSrc',
+		value: function getSrc() {
+			return this.proxy.getSrc();
+		}
+	}, {
+		key: 'canPlayType',
+		value: function canPlayType(type) {
+			return this.proxy.canPlayType(type);
+		}
+	}, {
+		key: 'remove',
+		value: function remove() {
+			var t = this,
+			    rendererName = t.media.rendererName,
+			    src = t.media.originalNode.src;
+
+			for (var featureIndex in t.options.features) {
+				var feature = t.options.features[featureIndex];
+				if (t['clean' + feature]) {
+					try {
+						t['clean' + feature](t, t.getElement(t.layers), t.getElement(t.controls), t.media);
+					} catch (e) {
+						console.error('error cleaning ' + feature, e);
+					}
+				}
+			}
+
+			var nativeWidth = t.node.getAttribute('width'),
+			    nativeHeight = t.node.getAttribute('height');
+
+			if (nativeWidth) {
+				if (nativeWidth.indexOf('%') === -1) {
+					nativeWidth = nativeWidth + 'px';
+				}
+			} else {
+				nativeWidth = 'auto';
+			}
+
+			if (nativeHeight) {
+				if (nativeHeight.indexOf('%') === -1) {
+					nativeHeight = nativeHeight + 'px';
+				}
+			} else {
+				nativeHeight = 'auto';
+			}
+
+			t.node.style.width = nativeWidth;
+			t.node.style.height = nativeHeight;
+
+			t.setPlayerSize(0, 0);
+
+			if (!t.isDynamic) {
+				(function () {
+					t.node.setAttribute('controls', true);
+					t.node.setAttribute('id', t.node.getAttribute('id').replace('_' + rendererName, '').replace('_from_mejs', ''));
+					var poster = t.getElement(t.container).querySelector('.' + t.options.classPrefix + 'poster>img');
+					if (poster) {
+						t.node.setAttribute('poster', poster.src);
+					}
+
+					delete t.node.autoplay;
+
+					t.node.setAttribute('src', '');
+					if (t.media.canPlayType((0, _media.getTypeFromFile)(src)) !== '') {
+						t.node.setAttribute('src', src);
+					}
+
+					if (rendererName && rendererName.indexOf('iframe') > -1) {
+						var layer = _document2.default.getElementById(t.media.id + '-iframe-overlay');
+						layer.remove();
+					}
+
+					var node = t.node.cloneNode();
+					node.style.display = '';
+					t.getElement(t.container).parentNode.insertBefore(node, t.getElement(t.container));
+					t.node.remove();
+
+					if (t.mediaFiles) {
+						for (var i = 0, total = t.mediaFiles.length; i < total; i++) {
+							var source = _document2.default.createElement('source');
+							source.setAttribute('src', t.mediaFiles[i].src);
+							source.setAttribute('type', t.mediaFiles[i].type);
+							node.appendChild(source);
+						}
+					}
+					if (t.trackFiles) {
+						var _loop3 = function _loop3(_i4, _total4) {
+							var track = t.trackFiles[_i4];
+							var newTrack = _document2.default.createElement('track');
+							newTrack.kind = track.kind;
+							newTrack.label = track.label;
+							newTrack.srclang = track.srclang;
+							newTrack.src = track.src;
+
+							node.appendChild(newTrack);
+							newTrack.addEventListener('load', function () {
+								this.mode = 'showing';
+								node.textTracks[_i4].mode = 'showing';
+							});
+						};
+
+						for (var _i4 = 0, _total4 = t.trackFiles.length; _i4 < _total4; _i4++) {
+							_loop3(_i4, _total4);
+						}
+					}
+
+					delete t.node;
+					delete t.mediaFiles;
+					delete t.trackFiles;
+				})();
+			} else {
+				t.getElement(t.container).parentNode.insertBefore(t.node, t.getElement(t.container));
+			}
+
+			if (t.media.renderer && typeof t.media.renderer.destroy === 'function') {
+				t.media.renderer.destroy();
+			}
+
+			delete _mejs2.default.players[t.id];
+
+			if (_typeof(t.getElement(t.container)) === 'object') {
+				var offscreen = t.getElement(t.container).parentNode.querySelector('.' + t.options.classPrefix + 'offscreen');
+				offscreen.remove();
+				t.getElement(t.container).remove();
+			}
+			t.globalUnbind('resize', t.globalResizeCallback);
+			t.globalUnbind('keydown', t.globalKeydownCallback);
+			t.globalUnbind('click', t.globalClickCallback);
+
+			delete t.media.player;
+		}
+	}, {
+		key: 'paused',
+		get: function get() {
+			return this.proxy.paused;
+		}
+	}, {
+		key: 'muted',
+		get: function get() {
+			return this.proxy.muted;
+		},
+		set: function set(muted) {
+			this.setMuted(muted);
+		}
+	}, {
+		key: 'ended',
+		get: function get() {
+			return this.proxy.ended;
+		}
+	}, {
+		key: 'readyState',
+		get: function get() {
+			return this.proxy.readyState;
+		}
+	}, {
+		key: 'currentTime',
+		set: function set(time) {
+			this.setCurrentTime(time);
+		},
+		get: function get() {
+			return this.getCurrentTime();
+		}
+	}, {
+		key: 'duration',
+		get: function get() {
+			return this.getDuration();
+		}
+	}, {
+		key: 'volume',
+		set: function set(volume) {
+			this.setVolume(volume);
+		},
+		get: function get() {
+			return this.getVolume();
+		}
+	}, {
+		key: 'src',
+		set: function set(src) {
+			this.setSrc(src);
+		},
+		get: function get() {
+			return this.getSrc();
+		}
+	}]);
+
+	return MediaElementPlayer;
+}();
+
+_window2.default.MediaElementPlayer = MediaElementPlayer;
+_mejs2.default.MediaElementPlayer = MediaElementPlayer;
+
+exports.default = MediaElementPlayer;
+
+},{"17":17,"2":2,"25":25,"26":26,"27":27,"28":28,"3":3,"30":30,"5":5,"6":6,"7":7}],17:[function(_dereq_,module,exports){
+'use strict';
+
+Object.defineProperty(exports, "__esModule", {
+	value: true
+});
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _window = _dereq_(3);
+
+var _window2 = _interopRequireDefault(_window);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+var DefaultPlayer = function () {
+	function DefaultPlayer(player) {
+		_classCallCheck(this, DefaultPlayer);
+
+		this.media = player.media;
+		this.isVideo = player.isVideo;
+		this.classPrefix = player.options.classPrefix;
+		this.createIframeLayer = function () {
+			return player.createIframeLayer();
+		};
+		this.setPoster = function (url) {
+			return player.setPoster(url);
+		};
+		return this;
+	}
+
+	_createClass(DefaultPlayer, [{
+		key: 'play',
+		value: function play() {
+			this.media.play();
+		}
+	}, {
+		key: 'pause',
+		value: function pause() {
+			this.media.pause();
 		}
 	}, {
 		key: 'load',
@@ -5133,11 +5361,6 @@ var MediaElementPlayer = function () {
 			t.isLoaded = true;
 		}
 	}, {
-		key: 'setMuted',
-		value: function setMuted(muted) {
-			this.media.setMuted(muted);
-		}
-	}, {
 		key: 'setCurrentTime',
 		value: function setCurrentTime(time) {
 			this.media.setCurrentTime(time);
@@ -5148,6 +5371,11 @@ var MediaElementPlayer = function () {
 			return this.media.currentTime;
 		}
 	}, {
+		key: 'getDuration',
+		value: function getDuration() {
+			return this.media.getDuration();
+		}
+	}, {
 		key: 'setVolume',
 		value: function setVolume(volume) {
 			this.media.setVolume(volume);
@@ -5155,112 +5383,132 @@ var MediaElementPlayer = function () {
 	}, {
 		key: 'getVolume',
 		value: function getVolume() {
-			return this.media.volume;
+			return this.media.getVolume();
+		}
+	}, {
+		key: 'setMuted',
+		value: function setMuted(value) {
+			this.media.setMuted(value);
 		}
 	}, {
 		key: 'setSrc',
 		value: function setSrc(src) {
 			var t = this,
-			    layer = t.container.find('#' + t.media.id + '-iframe-overlay');
+			    layer = document.getElementById(t.media.id + '-iframe-overlay');
 
-			t.media.setSrc(src);
-
-			if (layer.length) {
+			if (layer) {
 				layer.remove();
 			}
 
+			t.media.setSrc(src);
 			t.createIframeLayer();
+			if (t.media.renderer !== null && typeof t.media.renderer.getPosterUrl === 'function') {
+				t.setPoster(t.media.renderer.getPosterUrl());
+			}
 		}
 	}, {
-		key: 'remove',
-		value: function remove() {
-
-			var t = this,
-			    rendererName = t.media.rendererName;
-
-			// Stop completely media playing
-			if (!t.media.paused) {
-				t.media.pause();
-			}
-
-			var src = t.media.originalNode.getAttribute('src');
-			t.media.setSrc('');
-
-			// invoke features cleanup
-			for (var featureIndex in t.options.features) {
-				var feature = t.options.features[featureIndex];
-				if (t['clean' + feature]) {
-					try {
-						t['clean' + feature](t);
-					} catch (e) {
-						// @todo: report control error
-						console.error('error cleaning ' + feature, e);
-					}
-				}
-			}
-
-			// reset dimensions
-			t.$node.css({
-				width: t.$node.attr('width') || 'auto',
-				height: t.$node.attr('height') || 'auto'
-			});
-
-			// grab video and put it back in place
-			if (!t.isDynamic) {
-				t.$media.prop('controls', true);
-				// detach events from the video
-				// @todo: detach event listeners better than this; also detach ONLY the events attached by this plugin!
-				t.$node.attr('id', t.$node.attr('id').replace('_' + rendererName, ''));
-				t.$node.attr('id', t.$node.attr('id').replace('_from_mejs', ''));
-
-				// Remove `autoplay` (not worth bringing it back once player is destroyed)
-				t.$node.removeProp('autoplay');
-
-				// Reintegrate file if it can be played
-				if (t.media.canPlayType((0, _media.getTypeFromFile)(src))) {
-					t.$node.attr('src', src);
-				}
-
-				// If <iframe>, remove overlay
-				if (rendererName.match(/iframe/i) !== null) {
-					t.container.find('#' + t.media.id + '-iframe-overlay').remove();
-				}
-
-				t.$node.clone().insertBefore(t.container).show();
-				t.$node.remove();
-			} else {
-				t.$node.insertBefore(t.container);
-			}
-
-			if (typeof t.media.destroy === 'function') {
-				t.media.destroy();
-			}
-
-			// Remove the player from the mejs.players object so that pauseOtherPlayers doesn't blow up when trying to
-			// pause a non existent Flash API.
-			delete _mejs2.default.players[t.id];
-
-			if (_typeof(t.container) === 'object') {
-				t.container.prev('.' + t.options.classPrefix + 'offscreen').remove();
-				t.container.remove();
-			}
-			t.globalUnbind();
-
-			delete t.node.player;
+		key: 'getSrc',
+		value: function getSrc() {
+			return this.media.getSrc();
+		}
+	}, {
+		key: 'canPlayType',
+		value: function canPlayType(type) {
+			return this.media.canPlayType(type);
+		}
+	}, {
+		key: 'paused',
+		get: function get() {
+			return this.media.paused;
+		}
+	}, {
+		key: 'muted',
+		set: function set(muted) {
+			this.setMuted(muted);
+		},
+		get: function get() {
+			return this.media.muted;
+		}
+	}, {
+		key: 'ended',
+		get: function get() {
+			return this.media.ended;
+		}
+	}, {
+		key: 'readyState',
+		get: function get() {
+			return this.media.readyState;
+		}
+	}, {
+		key: 'currentTime',
+		set: function set(time) {
+			this.setCurrentTime(time);
+		},
+		get: function get() {
+			return this.getCurrentTime();
+		}
+	}, {
+		key: 'duration',
+		get: function get() {
+			return this.getDuration();
+		}
+	}, {
+		key: 'remainingTime',
+		get: function get() {
+			return this.getDuration() - this.currentTime();
+		}
+	}, {
+		key: 'volume',
+		set: function set(volume) {
+			this.setVolume(volume);
+		},
+		get: function get() {
+			return this.getVolume();
+		}
+	}, {
+		key: 'src',
+		set: function set(src) {
+			this.setSrc(src);
+		},
+		get: function get() {
+			return this.getSrc();
 		}
 	}]);
 
-	return MediaElementPlayer;
+	return DefaultPlayer;
 }();
 
-_window2.default.MediaElementPlayer = MediaElementPlayer;
+exports.default = DefaultPlayer;
 
-exports.default = MediaElementPlayer;
 
-// turn into plugin
+_window2.default.DefaultPlayer = DefaultPlayer;
+
+},{"3":3}],18:[function(_dereq_,module,exports){
+'use strict';
+
+var _window = _dereq_(3);
+
+var _window2 = _interopRequireDefault(_window);
+
+var _mejs = _dereq_(7);
+
+var _mejs2 = _interopRequireDefault(_mejs);
+
+var _player = _dereq_(16);
+
+var _player2 = _interopRequireDefault(_player);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+if (typeof jQuery !== 'undefined') {
+	_mejs2.default.$ = _window2.default.jQuery = _window2.default.$ = jQuery;
+} else if (typeof Zepto !== 'undefined') {
+	_mejs2.default.$ = _window2.default.Zepto = _window2.default.$ = Zepto;
+} else if (typeof ender !== 'undefined') {
+	_mejs2.default.$ = _window2.default.ender = _window2.default.$ = ender;
+}
 
 (function ($) {
-
 	if (typeof $ !== 'undefined') {
 		$.fn.mediaelementplayer = function (options) {
 			if (options === false) {
@@ -5273,185 +5521,116 @@ exports.default = MediaElementPlayer;
 				});
 			} else {
 				this.each(function () {
-					$(this).data('mediaelementplayer', new MediaElementPlayer(this, options));
+					$(this).data('mediaelementplayer', new _player2.default(this, options));
 				});
 			}
 			return this;
 		};
 
-		$(_document2.default).ready(function () {
-			// auto enable using JSON attribute
-			$('.' + config.classPrefix + 'player').mediaelementplayer();
+		$(document).ready(function () {
+			$('.' + _mejs2.default.MepDefaults.classPrefix + 'player').mediaelementplayer();
 		});
 	}
 })(_mejs2.default.$);
 
-},{"2":2,"23":23,"24":24,"25":25,"27":27,"3":3,"4":4,"5":5,"6":6}],17:[function(_dereq_,module,exports){
+},{"16":16,"3":3,"7":7}],19:[function(_dereq_,module,exports){
 'use strict';
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 var _window = _dereq_(3);
 
 var _window2 = _interopRequireDefault(_window);
 
-var _document = _dereq_(2);
-
-var _document2 = _interopRequireDefault(_document);
-
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Native M(PEG)-Dash renderer
- *
- * Uses dash.js, a reference client implementation for the playback of M(PEG)-DASH via Javascript and compliant browsers.
- * It relies on HTML5 video and MediaSource Extensions for playback.
- * This renderer integrates new events associated with mpd files.
- * @see https://github.com/Dash-Industry-Forum/dash.js
- *
- */
 var NativeDash = {
-	/**
-  * @type {Boolean}
-  */
-	isMediaLoaded: false,
-	/**
-  * @type {Array}
-  */
-	creationQueue: [],
 
-	/**
-  * Create a queue to prepare the loading of an DASH source
-  *
-  * @param {Object} settings - an object with settings needed to load an DASH player instance
-  */
-	prepareSettings: function prepareSettings(settings) {
-		if (NativeDash.isLoaded) {
-			NativeDash.createInstance(settings);
-		} else {
-			NativeDash.loadScript(settings);
-			NativeDash.creationQueue.push(settings);
-		}
-	},
+	promise: null,
 
-	/**
-  * Load dash.mediaplayer.js script on the header of the document
-  *
-  * @param {Object} settings - an object with settings needed to load an DASH player instance
-  */
-	loadScript: function loadScript(settings) {
-
-		// Skip script loading since it is already loaded
+	load: function load(settings) {
 		if (typeof dashjs !== 'undefined') {
-			NativeDash.createInstance(settings);
-		} else if (!NativeDash.isScriptLoaded) {
-			(function () {
+			NativeDash.promise = new Promise(function (resolve) {
+				resolve();
+			}).then(function () {
+				NativeDash._createPlayer(settings);
+			});
+		} else {
+			settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : 'https://cdn.dashjs.org/latest/dash.all.min.js';
 
-				settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : '//cdn.dashjs.org/latest/dash.mediaplayer.min.js';
-
-				var script = _document2.default.createElement('script'),
-				    firstScriptTag = _document2.default.getElementsByTagName('script')[0];
-
-				var done = false;
-
-				script.src = settings.options.path;
-
-				// Attach handlers for all browsers
-				script.onload = script.onreadystatechange = function () {
-					if (!done && (!this.readyState || this.readyState === undefined || this.readyState === 'loaded' || this.readyState === 'complete')) {
-						done = true;
-						NativeDash.mediaReady();
-						script.onload = script.onreadystatechange = null;
-					}
-				};
-
-				firstScriptTag.parentNode.insertBefore(script, firstScriptTag);
-
-				NativeDash.isScriptLoaded = true;
-			})();
+			NativeDash.promise = NativeDash.promise || (0, _dom.loadScript)(settings.options.path);
+			NativeDash.promise.then(function () {
+				NativeDash._createPlayer(settings);
+			});
 		}
+
+		return NativeDash.promise;
 	},
 
-	/**
-  * Process queue of DASH player creation
-  *
-  */
-	mediaReady: function mediaReady() {
-
-		NativeDash.isLoaded = true;
-		NativeDash.isScriptLoaded = true;
-
-		while (NativeDash.creationQueue.length > 0) {
-			var settings = NativeDash.creationQueue.pop();
-			NativeDash.createInstance(settings);
-		}
-	},
-
-	/**
-  * Create a new instance of DASH player and trigger a custom event to initialize it
-  *
-  * @param {Object} settings - an object with settings needed to instantiate DASH object
-  */
-	createInstance: function createInstance(settings) {
-
+	_createPlayer: function _createPlayer(settings) {
 		var player = dashjs.MediaPlayer().create();
 		_window2.default['__ready__' + settings.id](player);
+		return player;
 	}
 };
 
 var DashNativeRenderer = {
 	name: 'native_dash',
-
 	options: {
 		prefix: 'native_dash',
 		dash: {
-			// Special config: used to set the local path/URL of dash.js player library
-			path: '//cdn.dashjs.org/latest/dash.mediaplayer.min.js',
-			debug: false
+			path: 'https://cdn.dashjs.org/latest/dash.all.min.js',
+			debug: false,
+			drm: {},
+
+			robustnessLevel: ''
 		}
 	},
-	/**
-  * Determine if a specific element type can be played with this render
-  *
-  * @param {String} type
-  * @return {Boolean}
-  */
+
 	canPlayType: function canPlayType(type) {
-		return _constants.HAS_MSE && ['application/dash+xml'].includes(type);
+		return _constants.HAS_MSE && ['application/dash+xml'].indexOf(type.toLowerCase()) > -1;
 	},
 
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
 	create: function create(mediaElement, options, mediaFiles) {
 
 		var originalNode = mediaElement.originalNode,
 		    id = mediaElement.id + '_' + options.prefix,
-		    preload = originalNode.getAttribute('preload'),
-		    autoplay = originalNode.getAttribute('autoplay');
+		    autoplay = originalNode.autoplay,
+		    children = originalNode.children;
 
 		var node = null,
-		    dashPlayer = void 0;
+		    dashPlayer = null;
+
+		originalNode.removeAttribute('type');
+		for (var i = 0, total = children.length; i < total; i++) {
+			children[i].removeAttribute('type');
+		}
 
 		node = originalNode.cloneNode(true);
 		options = Object.assign(options, mediaElement.options);
 
 		var props = _mejs2.default.html5media.properties,
+		    events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']).filter(function (e) {
+			return e !== 'error';
+		}),
+		    attachNativeEvents = function attachNativeEvents(e) {
+			var event = (0, _general.createEvent)(e.type, mediaElement);
+			mediaElement.dispatchEvent(event);
+		},
 		    assignGettersSetters = function assignGettersSetters(propName) {
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
 
@@ -5460,82 +5639,98 @@ var DashNativeRenderer = {
 			};
 
 			node['set' + capName] = function (value) {
-				if (!_mejs2.default.html5media.readOnlyProperties.includes(propName)) {
-					if (dashPlayer !== null) {
-						if (propName === 'src') {
+				if (_mejs2.default.html5media.readOnlyProperties.indexOf(propName) === -1) {
+					if (propName === 'src') {
+						var source = (typeof value === 'undefined' ? 'undefined' : _typeof(value)) === 'object' && value.src ? value.src : value;
+						node[propName] = source;
+						if (dashPlayer !== null) {
+							dashPlayer.reset();
+							for (var _i = 0, _total = events.length; _i < _total; _i++) {
+								node.removeEventListener(events[_i], attachNativeEvents);
+							}
+							dashPlayer = NativeDash._createPlayer({
+								options: options.dash,
+								id: id
+							});
 
-							dashPlayer.attachSource(value);
+							if (value && (typeof value === 'undefined' ? 'undefined' : _typeof(value)) === 'object' && _typeof(value.drm) === 'object') {
+								dashPlayer.setProtectionData(value.drm);
+								if ((0, _general.isString)(options.dash.robustnessLevel) && options.dash.robustnessLevel) {
+									dashPlayer.getProtectionController().setRobustnessLevel(options.dash.robustnessLevel);
+								}
+							}
+							dashPlayer.attachSource(source);
 							if (autoplay) {
-								node.play();
+								dashPlayer.play();
 							}
 						}
-
+					} else {
 						node[propName] = value;
 					}
 				}
 			};
 		};
 
-		for (var i = 0, total = props.length; i < total; i++) {
-			assignGettersSetters(props[i]);
+		for (var _i2 = 0, _total2 = props.length; _i2 < _total2; _i2++) {
+			assignGettersSetters(props[_i2]);
 		}
 
-		// Initial method to register all M-Dash events
 		_window2.default['__ready__' + id] = function (_dashPlayer) {
-
 			mediaElement.dashPlayer = dashPlayer = _dashPlayer;
 
-			dashPlayer.getDebug().setLogToBrowserConsole(options.dash.debug);
-			dashPlayer.setAutoPlay(autoplay);
-			dashPlayer.setScheduleWhilePaused(preload === 'auto');
-
-			var events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']),
-			    dashEvents = dashjs.MediaPlayer.events,
+			var dashEvents = dashjs.MediaPlayer.events,
 			    assignEvents = function assignEvents(eventName) {
-
 				if (eventName === 'loadedmetadata') {
-					dashPlayer.initialize(node, node.src, false);
+					dashPlayer.getDebug().setLogToBrowserConsole(options.dash.debug);
+					dashPlayer.initialize();
+					dashPlayer.setScheduleWhilePaused(false);
+					dashPlayer.setFastSwitchEnabled(true);
+					dashPlayer.attachView(node);
+					dashPlayer.setAutoPlay(false);
+
+					if (_typeof(options.dash.drm) === 'object' && !_mejs2.default.Utils.isObjectEmpty(options.dash.drm)) {
+						dashPlayer.setProtectionData(options.dash.drm);
+						if ((0, _general.isString)(options.dash.robustnessLevel) && options.dash.robustnessLevel) {
+							dashPlayer.getProtectionController().setRobustnessLevel(options.dash.robustnessLevel);
+						}
+					}
+					dashPlayer.attachSource(node.getSrc());
 				}
 
-				node.addEventListener(eventName, function (e) {
-					var event = _document2.default.createEvent('HTMLEvents');
-					event.initEvent(e.type, e.bubbles, e.cancelable);
-					mediaElement.dispatchEvent(event);
-				});
+				node.addEventListener(eventName, attachNativeEvents);
 			};
 
-			for (var _i = 0, _total = events.length; _i < _total; _i++) {
-				assignEvents(events[_i]);
+			for (var _i3 = 0, _total3 = events.length; _i3 < _total3; _i3++) {
+				assignEvents(events[_i3]);
 			}
 
-			/**
-    * Custom M(PEG)-DASH events
-    *
-    * These events can be attached to the original node using addEventListener and the name of the event,
-    * not using dashjs.MediaPlayer.events object
-    * @see http://cdn.dashjs.org/latest/jsdoc/MediaPlayerEvents.html
-    */
 			var assignMdashEvents = function assignMdashEvents(e) {
-				var event = (0, _general.createEvent)(e.type, node);
-				event.data = e;
-				mediaElement.dispatchEvent(event);
-
 				if (e.type.toLowerCase() === 'error') {
+					mediaElement.generateError(e.message, node.src);
 					console.error(e);
+				} else {
+					var _event = (0, _general.createEvent)(e.type, mediaElement);
+					_event.data = e;
+					mediaElement.dispatchEvent(_event);
 				}
 			};
 
 			for (var eventType in dashEvents) {
 				if (dashEvents.hasOwnProperty(eventType)) {
-					dashPlayer.on(dashEvents[eventType], assignMdashEvents);
+					dashPlayer.on(dashEvents[eventType], function (e) {
+						return assignMdashEvents(e);
+					});
 				}
 			}
 		};
 
 		if (mediaFiles && mediaFiles.length > 0) {
-			for (var _i2 = 0, _total2 = mediaFiles.length; _i2 < _total2; _i2++) {
-				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[_i2].type)) {
-					node.setAttribute('src', mediaFiles[_i2].src);
+			for (var _i4 = 0, _total4 = mediaFiles.length; _i4 < _total4; _i4++) {
+				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[_i4].type)) {
+					node.setAttribute('src', mediaFiles[_i4].src);
+					if (typeof mediaFiles[_i4].drm !== 'undefined') {
+						options.dash.drm = mediaFiles[_i4].drm;
+					}
 					break;
 				}
 			}
@@ -5544,19 +5739,12 @@ var DashNativeRenderer = {
 		node.setAttribute('id', id);
 
 		originalNode.parentNode.insertBefore(node, originalNode);
-		originalNode.removeAttribute('autoplay');
+		originalNode.autoplay = false;
 		originalNode.style.display = 'none';
 
-		NativeDash.prepareSettings({
-			options: options.dash,
-			id: id
-		});
-
-		// HELPER METHODS
 		node.setSize = function (width, height) {
 			node.style.width = width + 'px';
 			node.style.height = height + 'px';
-
 			return node;
 		};
 
@@ -5571,25 +5759,31 @@ var DashNativeRenderer = {
 			return node;
 		};
 
+		node.destroy = function () {
+			if (dashPlayer !== null) {
+				dashPlayer.reset();
+			}
+		};
+
 		var event = (0, _general.createEvent)('rendererready', node);
 		mediaElement.dispatchEvent(event);
+
+		mediaElement.promises.push(NativeDash.load({
+			options: options.dash,
+			id: id
+		}));
 
 		return node;
 	}
 };
 
-/**
- * Register Native M(PEG)-Dash type based on URL structure
- *
- */
 _media.typeChecks.push(function (url) {
-	url = url.toLowerCase();
-	return url.includes('.mpd') ? 'application/dash+xml' : null;
+	return ~url.toLowerCase().indexOf('.mpd') ? 'application/dash+xml' : null;
 });
 
 _renderer.renderer.add(DashNativeRenderer);
 
-},{"2":2,"23":23,"24":24,"25":25,"3":3,"6":6,"7":7}],18:[function(_dereq_,module,exports){
+},{"25":25,"26":26,"27":27,"28":28,"3":3,"7":7,"8":8}],20:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -5607,48 +5801,27 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _i18n = _dereq_(4);
+var _i18n = _dereq_(5);
 
 var _i18n2 = _interopRequireDefault(_i18n);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Shim that falls back to Flash if a media type is not supported.
- *
- * Any format not supported natively, including, RTMP, FLV, HLS and M(PEG)-DASH (if browser does not support MSE),
- * will play using Flash.
- */
-
-/**
- * Core detector, plugins are added below
- *
- */
 var PluginDetector = exports.PluginDetector = {
-	/**
-  * Cached version numbers
-  * @type {Array}
-  */
 	plugins: [],
 
-	/**
-  * Test a plugin version number
-  * @param {String} plugin - In this scenario 'flash' will be tested
-  * @param {Array} v - An array containing the version up to 3 numbers (major, minor, revision)
-  * @return {Boolean}
-  */
 	hasPluginVersion: function hasPluginVersion(plugin, v) {
 		var pv = PluginDetector.plugins[plugin];
 		v[1] = v[1] || 0;
@@ -5656,36 +5829,16 @@ var PluginDetector = exports.PluginDetector = {
 		return pv[0] > v[0] || pv[0] === v[0] && pv[1] > v[1] || pv[0] === v[0] && pv[1] === v[1] && pv[2] >= v[2];
 	},
 
-	/**
-  * Detect plugin and store its version number
-  *
-  * @see PluginDetector.detectPlugin
-  * @param {String} p
-  * @param {String} pluginName
-  * @param {String} mimeType
-  * @param {String} activeX
-  * @param {Function} axDetect
-  */
 	addPlugin: function addPlugin(p, pluginName, mimeType, activeX, axDetect) {
 		PluginDetector.plugins[p] = PluginDetector.detectPlugin(pluginName, mimeType, activeX, axDetect);
 	},
 
-	/**
-  * Obtain version number from the mime-type (all but IE) or ActiveX (IE)
-  *
-  * @param {String} pluginName
-  * @param {String} mimeType
-  * @param {String} activeX
-  * @param {Function} axDetect
-  * @return {int[]}
-  */
 	detectPlugin: function detectPlugin(pluginName, mimeType, activeX, axDetect) {
 
 		var version = [0, 0, 0],
 		    description = void 0,
 		    ax = void 0;
 
-		// Firefox, Webkit, Opera; avoid MS Edge since `plugins` cannot be accessed
 		if (_constants.NAV.plugins !== null && _constants.NAV.plugins !== undefined && _typeof(_constants.NAV.plugins[pluginName]) === 'object') {
 			description = _constants.NAV.plugins[pluginName].description;
 			if (description && !(typeof _constants.NAV.mimeTypes !== 'undefined' && _constants.NAV.mimeTypes[mimeType] && !_constants.NAV.mimeTypes[mimeType].enabledPlugin)) {
@@ -5694,7 +5847,6 @@ var PluginDetector = exports.PluginDetector = {
 					version[i] = parseInt(version[i].match(/\d+/), 10);
 				}
 			}
-			// Internet Explorer / ActiveX
 		} else if (_window2.default.ActiveXObject !== undefined) {
 			try {
 				ax = new ActiveXObject(activeX);
@@ -5709,12 +5861,7 @@ var PluginDetector = exports.PluginDetector = {
 	}
 };
 
-/**
- * Add Flash detection
- *
- */
 PluginDetector.addPlugin('flash', 'Shockwave Flash', 'application/x-shockwave-flash', 'ShockwaveFlash.ShockwaveFlash', function (ax) {
-	// adapted from SWFObject
 	var version = [],
 	    d = ax.GetVariable("$version");
 
@@ -5726,67 +5873,41 @@ PluginDetector.addPlugin('flash', 'Shockwave Flash', 'application/x-shockwave-fl
 });
 
 var FlashMediaElementRenderer = {
-
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
 	create: function create(mediaElement, options, mediaFiles) {
 
 		var flash = {};
+		var isActive = false;
 
-		// store main variable
 		flash.options = options;
 		flash.id = mediaElement.id + '_' + flash.options.prefix;
 		flash.mediaElement = mediaElement;
-
-		// insert data
 		flash.flashState = {};
 		flash.flashApi = null;
 		flash.flashApiStack = [];
 
-		// mediaElements for get/set
 		var props = _mejs2.default.html5media.properties,
 		    assignGettersSetters = function assignGettersSetters(propName) {
-
-			// add to flash state that we will store
 			flash.flashState[propName] = null;
 
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
 
 			flash['get' + capName] = function () {
-
 				if (flash.flashApi !== null) {
+					if (typeof flash.flashApi['get_' + propName] === 'function') {
+						var value = flash.flashApi['get_' + propName]();
 
-					if (flash.flashApi['get_' + propName] !== undefined) {
-						var _ret = function () {
-							var value = flash.flashApi['get_' + propName]();
-
-							// special case for buffered to conform to HTML5's newest
-							if (propName === 'buffered') {
-								return {
-									v: {
-										start: function start() {
-											return 0;
-										},
-										end: function end() {
-											return value;
-										},
-										length: 1
-									}
-								};
-							}
-
+						if (propName === 'buffered') {
 							return {
-								v: value
+								start: function start() {
+									return 0;
+								},
+								end: function end() {
+									return value;
+								},
+								length: 1
 							};
-						}();
-
-						if ((typeof _ret === 'undefined' ? 'undefined' : _typeof(_ret)) === "object") return _ret.v;
+						}
+						return value;
 					} else {
 						return null;
 					}
@@ -5800,11 +5921,13 @@ var FlashMediaElementRenderer = {
 					value = (0, _media.absolutizeUrl)(value);
 				}
 
-				// send value to Flash
 				if (flash.flashApi !== null && flash.flashApi['set_' + propName] !== undefined) {
-					flash.flashApi['set_' + propName](value);
+					try {
+						flash.flashApi['set_' + propName](value);
+					} catch (e) {
+						
+					}
 				} else {
-					// store for after "READY" event fires
 					flash.flashApiStack.push({
 						type: 'set',
 						propName: propName,
@@ -5818,31 +5941,26 @@ var FlashMediaElementRenderer = {
 			assignGettersSetters(props[i]);
 		}
 
-		// add mediaElements for native methods
 		var methods = _mejs2.default.html5media.methods,
 		    assignMethods = function assignMethods(methodName) {
-
-			// run the method on the native HTMLMediaElement
 			flash[methodName] = function () {
-
-				if (flash.flashApi !== null) {
-
-					// send call up to Flash ExternalInterface API
-					if (flash.flashApi['fire_' + methodName]) {
-						try {
-							flash.flashApi['fire_' + methodName]();
-						} catch (e) {
+				if (isActive) {
+					if (flash.flashApi !== null) {
+						if (flash.flashApi['fire_' + methodName]) {
+							try {
+								flash.flashApi['fire_' + methodName]();
+							} catch (e) {
+								
+							}
+						} else {
 							
 						}
 					} else {
-						
+						flash.flashApiStack.push({
+							type: 'call',
+							methodName: methodName
+						});
 					}
-				} else {
-					// store for after "READY" event fires
-					flash.flashApiStack.push({
-						type: 'call',
-						methodName: methodName
-					});
 				}
 			};
 		};
@@ -5851,24 +5969,20 @@ var FlashMediaElementRenderer = {
 			assignMethods(methods[_i]);
 		}
 
-		// give initial events like in others renderers
-		var initEvents = ['rendererready', 'loadeddata', 'loadedmetadata', 'canplay', 'error'];
+		var initEvents = ['rendererready'];
 
 		for (var _i2 = 0, _total2 = initEvents.length; _i2 < _total2; _i2++) {
 			var event = (0, _general.createEvent)(initEvents[_i2], flash);
 			mediaElement.dispatchEvent(event);
 		}
 
-		// add a ready method that Flash can call to
 		_window2.default['__ready__' + flash.id] = function () {
 
 			flash.flashReady = true;
 			flash.flashApi = _document2.default.getElementById('__' + flash.id);
 
-			// do call stack
 			if (flash.flashApiStack.length) {
 				for (var _i3 = 0, _total3 = flash.flashApiStack.length; _i3 < _total3; _i3++) {
-
 					var stackItem = flash.flashApiStack[_i3];
 
 					if (stackItem.type === 'set') {
@@ -5884,24 +5998,27 @@ var FlashMediaElementRenderer = {
 		};
 
 		_window2.default['__event__' + flash.id] = function (eventName, message) {
-
 			var event = (0, _general.createEvent)(eventName, flash);
-			event.message = message || '';
+			if (message) {
+				try {
+					event.data = JSON.parse(message);
+					event.details.data = JSON.parse(message);
+				} catch (e) {
+					event.message = message;
+				}
+			}
 
-			// send event from Flash up to the mediaElement
 			flash.mediaElement.dispatchEvent(event);
 		};
 
-		// insert Flash object
 		flash.flashWrapper = _document2.default.createElement('div');
 
-		// If the access script flag does not have any of the valid values, set to `sameDomain` by default
-		if (!['always', 'sameDomain'].includes(flash.options.shimScriptAccess)) {
+		if (['always', 'sameDomain'].indexOf(flash.options.shimScriptAccess) === -1) {
 			flash.options.shimScriptAccess = 'sameDomain';
 		}
 
-		var autoplay = !!mediaElement.getAttribute('autoplay'),
-		    flashVars = ['uid=' + flash.id, 'autoplay=' + autoplay, 'allowScriptAccess=' + flash.options.shimScriptAccess],
+		var autoplay = mediaElement.originalNode.autoplay,
+		    flashVars = ['uid=' + flash.id, 'autoplay=' + autoplay, 'allowScriptAccess=' + flash.options.shimScriptAccess, 'preload=' + (mediaElement.originalNode.getAttribute('preload') || '')],
 		    isVideo = mediaElement.originalNode !== null && mediaElement.originalNode.tagName.toLowerCase() === 'video',
 		    flashHeight = isVideo ? mediaElement.originalNode.height : 1,
 		    flashWidth = isVideo ? mediaElement.originalNode.width : 1;
@@ -5915,19 +6032,28 @@ var FlashMediaElementRenderer = {
 			flashVars.push('pseudostreamtype=' + flash.options.pseudoStreamingType);
 		}
 
-		mediaElement.appendChild(flash.flashWrapper);
-
-		if (mediaElement.originalNode !== null) {
-			mediaElement.originalNode.style.display = 'none';
+		if (flash.options.streamDelimiter) {
+			flashVars.push('streamdelimiter=' + encodeURIComponent(flash.options.streamDelimiter));
 		}
+
+		if (flash.options.proxyType) {
+			flashVars.push('proxytype=' + flash.options.proxyType);
+		}
+
+		mediaElement.appendChild(flash.flashWrapper);
+		mediaElement.originalNode.style.display = 'none';
 
 		var settings = [];
 
-		if (_constants.IS_IE) {
+		if (_constants.IS_IE || _constants.IS_EDGE) {
 			var specialIEContainer = _document2.default.createElement('div');
 			flash.flashWrapper.appendChild(specialIEContainer);
 
-			settings = ['classid="clsid:D27CDB6E-AE6D-11cf-96B8-444553540000"', 'codebase="//download.macromedia.com/pub/shockwave/cabs/flash/swflash.cab"', 'id="__' + flash.id + '"', 'width="' + flashWidth + '"', 'height="' + flashHeight + '"'];
+			if (_constants.IS_EDGE) {
+				settings = ['type="application/x-shockwave-flash"', 'data="' + flash.options.pluginPath + flash.options.filename + '"', 'id="__' + flash.id + '"', 'width="' + flashWidth + '"', 'height="' + flashHeight + '\'"'];
+			} else {
+				settings = ['classid="clsid:D27CDB6E-AE6D-11cf-96B8-444553540000"', 'codebase="//download.macromedia.com/pub/shockwave/cabs/flash/swflash.cab"', 'id="__' + flash.id + '"', 'width="' + flashWidth + '"', 'height="' + flashHeight + '"'];
+			}
 
 			if (!isVideo) {
 				settings.push('style="clip: rect(0 0 0 0); position: absolute;"');
@@ -5936,10 +6062,13 @@ var FlashMediaElementRenderer = {
 			specialIEContainer.outerHTML = '<object ' + settings.join(' ') + '>' + ('<param name="movie" value="' + flash.options.pluginPath + flash.options.filename + '?x=' + new Date() + '" />') + ('<param name="flashvars" value="' + flashVars.join('&amp;') + '" />') + '<param name="quality" value="high" />' + '<param name="bgcolor" value="#000000" />' + '<param name="wmode" value="transparent" />' + ('<param name="allowScriptAccess" value="' + flash.options.shimScriptAccess + '" />') + '<param name="allowFullScreen" value="true" />' + ('<div>' + _i18n2.default.t('mejs.install-flash') + '</div>') + '</object>';
 		} else {
 
-			settings = ['id="__' + flash.id + '"', 'name="__' + flash.id + '"', 'play="true"', 'loop="false"', 'quality="high"', 'bgcolor="#000000"', 'wmode="transparent"', 'allowScriptAccess="' + flash.options.shimScriptAccess + '"', 'allowFullScreen="true"', 'type="application/x-shockwave-flash"', 'pluginspage="//www.macromedia.com/go/getflashplayer"', 'src="' + flash.options.pluginPath + flash.options.filename + '"', 'flashvars="' + flashVars.join('&') + '"', 'width="' + flashWidth + '"', 'height="' + flashHeight + '"'];
+			settings = ['id="__' + flash.id + '"', 'name="__' + flash.id + '"', 'play="true"', 'loop="false"', 'quality="high"', 'bgcolor="#000000"', 'wmode="transparent"', 'allowScriptAccess="' + flash.options.shimScriptAccess + '"', 'allowFullScreen="true"', 'type="application/x-shockwave-flash"', 'pluginspage="//www.macromedia.com/go/getflashplayer"', 'src="' + flash.options.pluginPath + flash.options.filename + '"', 'flashvars="' + flashVars.join('&') + '"'];
 
-			if (!isVideo) {
-				settings.push('style="clip: rect(0 0 0 0); position: absolute;"');
+			if (isVideo) {
+				settings.push('width="' + flashWidth + '"');
+				settings.push('height="' + flashHeight + '"');
+			} else {
+				settings.push('style="position: fixed; left: -9999em; top: -9999em;"');
 			}
 
 			flash.flashWrapper.innerHTML = '<embed ' + settings.join(' ') + '>';
@@ -5948,27 +6077,15 @@ var FlashMediaElementRenderer = {
 		flash.flashNode = flash.flashWrapper.lastChild;
 
 		flash.hide = function () {
+			isActive = false;
 			if (isVideo) {
-				flash.flashNode.style.position = 'absolute';
-				flash.flashNode.style.width = '1px';
-				flash.flashNode.style.height = '1px';
-				try {
-					flash.flashNode.style.clip = 'rect(0 0 0 0);';
-				} catch (e) {
-					
-				}
+				flash.flashNode.style.display = 'none';
 			}
 		};
 		flash.show = function () {
+			isActive = true;
 			if (isVideo) {
-				flash.flashNode.style.position = '';
-				flash.flashNode.style.width = '';
-				flash.flashNode.style.height = '';
-				try {
-					flash.flashNode.style.clip = '';
-				} catch (e) {
-					
-				}
+				flash.flashNode.style.display = '';
 			}
 		};
 		flash.setSize = function (width, height) {
@@ -5981,7 +6098,7 @@ var FlashMediaElementRenderer = {
 		};
 
 		flash.destroy = function () {
-			flash.flashNode.parentNode.removeChild(flash.flashNode);
+			flash.flashNode.remove();
 		};
 
 		if (mediaFiles && mediaFiles.length > 0) {
@@ -6000,55 +6117,46 @@ var FlashMediaElementRenderer = {
 var hasFlash = PluginDetector.hasPluginVersion('flash', [10, 0, 0]);
 
 if (hasFlash) {
-
-	/**
-  * Register media type based on URL structure if Flash is detected
-  *
-  */
 	_media.typeChecks.push(function (url) {
-
 		url = url.toLowerCase();
 
 		if (url.startsWith('rtmp')) {
-			if (url.includes('.mp3')) {
+			if (~url.indexOf('.mp3')) {
 				return 'audio/rtmp';
 			} else {
 				return 'video/rtmp';
 			}
-		} else if (url.includes('.oga') || url.includes('.ogg')) {
+		} else if (/\.og(a|g)/i.test(url)) {
 			return 'audio/ogg';
-		} else if (url.includes('.m3u8')) {
+		} else if (~url.indexOf('.m3u8')) {
 			return 'application/x-mpegURL';
-		} else if (url.includes('.mpd')) {
+		} else if (~url.indexOf('.mpd')) {
 			return 'application/dash+xml';
-		} else if (url.includes('.flv')) {
+		} else if (~url.indexOf('.flv')) {
 			return 'video/flv';
 		} else {
 			return null;
 		}
 	});
 
-	// VIDEO
 	var FlashMediaElementVideoRenderer = {
 		name: 'flash_video',
-
 		options: {
 			prefix: 'flash_video',
 			filename: 'mediaelement-flash-video.swf',
 			enablePseudoStreaming: false,
-			// start query parameter sent to server for pseudo-streaming
+
 			pseudoStreamingStartQueryParam: 'start',
-			// pseudo streaming type: use `time` for time based seeking (MP4) or `byte` for file byte position (FLV)
-			pseudoStreamingType: 'byte'
+
+			pseudoStreamingType: 'byte',
+
+			proxyType: '',
+
+			streamDelimiter: ''
 		},
-		/**
-   * Determine if a specific element type can be played with this render
-   *
-   * @param {String} type
-   * @return {Boolean}
-   */
+
 		canPlayType: function canPlayType(type) {
-			return ['video/mp4', 'video/rtmp', 'audio/rtmp', 'rtmp/mp4', 'audio/mp4', 'video/flv', 'video/x-flv'].includes(type.toLowerCase());
+			return ~['video/mp4', 'video/rtmp', 'audio/rtmp', 'rtmp/mp4', 'audio/mp4', 'video/flv', 'video/x-flv'].indexOf(type.toLowerCase());
 		},
 
 		create: FlashMediaElementRenderer.create
@@ -6056,88 +6164,60 @@ if (hasFlash) {
 	};
 	_renderer.renderer.add(FlashMediaElementVideoRenderer);
 
-	// HLS
 	var FlashMediaElementHlsVideoRenderer = {
 		name: 'flash_hls',
-
 		options: {
 			prefix: 'flash_hls',
 			filename: 'mediaelement-flash-video-hls.swf'
 		},
-		/**
-   * Determine if a specific element type can be played with this render
-   *
-   * @param {String} type
-   * @return {Boolean}
-   */
+
 		canPlayType: function canPlayType(type) {
-			return ['application/x-mpegurl', 'vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].includes(type.toLowerCase());
+			return ~['application/x-mpegurl', 'application/vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].indexOf(type.toLowerCase());
 		},
 
 		create: FlashMediaElementRenderer.create
 	};
 	_renderer.renderer.add(FlashMediaElementHlsVideoRenderer);
 
-	// M(PEG)-DASH
 	var FlashMediaElementMdashVideoRenderer = {
 		name: 'flash_dash',
-
 		options: {
 			prefix: 'flash_dash',
 			filename: 'mediaelement-flash-video-mdash.swf'
 		},
-		/**
-   * Determine if a specific element type can be played with this render
-   *
-   * @param {String} type
-   * @return {Boolean}
-   */
+
 		canPlayType: function canPlayType(type) {
-			return ['application/dash+xml'].includes(type.toLowerCase());
+			return ~['application/dash+xml'].indexOf(type.toLowerCase());
 		},
 
 		create: FlashMediaElementRenderer.create
 	};
 	_renderer.renderer.add(FlashMediaElementMdashVideoRenderer);
 
-	// AUDIO
 	var FlashMediaElementAudioRenderer = {
 		name: 'flash_audio',
-
 		options: {
 			prefix: 'flash_audio',
 			filename: 'mediaelement-flash-audio.swf'
 		},
-		/**
-   * Determine if a specific element type can be played with this render
-   *
-   * @param {String} type
-   * @return {Boolean}
-   */
+
 		canPlayType: function canPlayType(type) {
-			return ['audio/mp3'].includes(type.toLowerCase());
+			return ~['audio/mp3'].indexOf(type.toLowerCase());
 		},
 
 		create: FlashMediaElementRenderer.create
 	};
 	_renderer.renderer.add(FlashMediaElementAudioRenderer);
 
-	// AUDIO - ogg
 	var FlashMediaElementAudioOggRenderer = {
 		name: 'flash_audio_ogg',
-
 		options: {
 			prefix: 'flash_audio_ogg',
 			filename: 'mediaelement-flash-audio-ogg.swf'
 		},
-		/**
-   * Determine if a specific element type can be played with this render
-   *
-   * @param {String} type
-   * @return {Boolean}
-   */
+
 		canPlayType: function canPlayType(type) {
-			return ['audio/ogg', 'audio/oga', 'audio/ogv'].includes(type.toLowerCase());
+			return ~['audio/ogg', 'audio/oga', 'audio/ogv'].indexOf(type.toLowerCase());
 		},
 
 		create: FlashMediaElementRenderer.create
@@ -6145,173 +6225,98 @@ if (hasFlash) {
 	_renderer.renderer.add(FlashMediaElementAudioOggRenderer);
 }
 
-},{"2":2,"23":23,"24":24,"25":25,"3":3,"4":4,"6":6,"7":7}],19:[function(_dereq_,module,exports){
+},{"2":2,"25":25,"27":27,"28":28,"3":3,"5":5,"7":7,"8":8}],21:[function(_dereq_,module,exports){
 'use strict';
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 var _window = _dereq_(3);
 
 var _window2 = _interopRequireDefault(_window);
 
-var _document = _dereq_(2);
-
-var _document2 = _interopRequireDefault(_document);
-
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Native FLV renderer
- *
- * Uses flv.js, which is a JavaScript library which implements mechanisms to play flv files inspired by flv.js.
- * It relies on HTML5 video and MediaSource Extensions for playback.
- * Currently, it can only play files with the same origin.
- *
- * @see https://github.com/Bilibili/flv.js
- *
- */
 var NativeFlv = {
-	/**
-  * @type {Boolean}
-  */
-	isMediaStarted: false,
-	/**
-  * @type {Boolean}
-  */
-	isMediaLoaded: false,
-	/**
-  * @type {Array}
-  */
-	creationQueue: [],
 
-	/**
-  * Create a queue to prepare the loading of an FLV source
-  * @param {Object} settings - an object with settings needed to load an FLV player instance
-  */
-	prepareSettings: function prepareSettings(settings) {
-		if (NativeFlv.isLoaded) {
-			NativeFlv.createInstance(settings);
-		} else {
-			NativeFlv.loadScript(settings);
-			NativeFlv.creationQueue.push(settings);
-		}
-	},
+	promise: null,
 
-	/**
-  * Load flv.js script on the header of the document
-  *
-  * @param {Object} settings - an object with settings needed to load an FLV player instance
-  */
-	loadScript: function loadScript(settings) {
-
-		// Skip script loading since it is already loaded
+	load: function load(settings) {
 		if (typeof flvjs !== 'undefined') {
-			NativeFlv.createInstance(settings);
-		} else if (!NativeFlv.isMediaStarted) {
-			(function () {
+			NativeFlv.promise = new Promise(function (resolve) {
+				resolve();
+			}).then(function () {
+				NativeFlv._createPlayer(settings);
+			});
+		} else {
+			settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : 'https://cdn.jsdelivr.net/npm/flv.js@latest';
 
-				settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : '//cdnjs.cloudflare.com/ajax/libs/flv.js/1.1.0/flv.min.js';
-
-				var script = _document2.default.createElement('script'),
-				    firstScriptTag = _document2.default.getElementsByTagName('script')[0];
-
-				var done = false;
-
-				script.src = settings.options.path;
-
-				// Attach handlers for all browsers
-				script.onload = script.onreadystatechange = function () {
-					if (!done && (!this.readyState || this.readyState === undefined || this.readyState === 'loaded' || this.readyState === 'complete')) {
-						done = true;
-						NativeFlv.mediaReady();
-						script.onload = script.onreadystatechange = null;
-					}
-				};
-
-				firstScriptTag.parentNode.insertBefore(script, firstScriptTag);
-				NativeFlv.isMediaStarted = true;
-			})();
+			NativeFlv.promise = NativeFlv.promise || (0, _dom.loadScript)(settings.options.path);
+			NativeFlv.promise.then(function () {
+				NativeFlv._createPlayer(settings);
+			});
 		}
+
+		return NativeFlv.promise;
 	},
 
-	/**
-  * Process queue of FLV player creation
-  *
-  */
-	mediaReady: function mediaReady() {
-		NativeFlv.isLoaded = true;
-		NativeFlv.isMediaLoaded = true;
-
-		while (NativeFlv.creationQueue.length > 0) {
-			var settings = NativeFlv.creationQueue.pop();
-			NativeFlv.createInstance(settings);
-		}
-	},
-
-	/**
-  * Create a new instance of FLV player and trigger a custom event to initialize it
-  *
-  * @param {Object} settings - an object with settings needed to instantiate FLV object
-  */
-	createInstance: function createInstance(settings) {
-		var player = flvjs.createPlayer(settings.options);
+	_createPlayer: function _createPlayer(settings) {
+		flvjs.LoggingControl.enableDebug = settings.options.debug;
+		flvjs.LoggingControl.enableVerbose = settings.options.debug;
+		var player = flvjs.createPlayer(settings.options, settings.configs);
 		_window2.default['__ready__' + settings.id](player);
+		return player;
 	}
 };
 
 var FlvNativeRenderer = {
 	name: 'native_flv',
-
 	options: {
 		prefix: 'native_flv',
 		flv: {
-			// Special config: used to set the local path/URL of flv.js library
-			path: '//cdnjs.cloudflare.com/ajax/libs/flv.js/1.1.0/flv.min.js',
-			// To modify more elements from FLV player,
-			// see https://github.com/Bilibili/flv.js/blob/master/docs/api.md#config
-			cors: true
+			path: 'https://cdn.jsdelivr.net/npm/flv.js@latest',
+
+			cors: true,
+			debug: false
 		}
 	},
-	/**
-  * Determine if a specific element type can be played with this render
-  *
-  * @param {String} type
-  * @return {Boolean}
-  */
+
 	canPlayType: function canPlayType(type) {
-		return _constants.HAS_MSE && ['video/x-flv', 'video/flv'].includes(type);
+		return _constants.HAS_MSE && ['video/x-flv', 'video/flv'].indexOf(type.toLowerCase()) > -1;
 	},
 
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
 	create: function create(mediaElement, options, mediaFiles) {
 
 		var originalNode = mediaElement.originalNode,
 		    id = mediaElement.id + '_' + options.prefix;
 
 		var node = null,
-		    flvPlayer = void 0;
+		    flvPlayer = null;
 
 		node = originalNode.cloneNode(true);
 		options = Object.assign(options, mediaElement.options);
 
 		var props = _mejs2.default.html5media.properties,
+		    events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']).filter(function (e) {
+			return e !== 'error';
+		}),
+		    attachNativeEvents = function attachNativeEvents(e) {
+			var event = (0, _general.createEvent)(e.type, mediaElement);
+			mediaElement.dispatchEvent(event);
+		},
 		    assignGettersSetters = function assignGettersSetters(propName) {
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
 
@@ -6320,16 +6325,32 @@ var FlvNativeRenderer = {
 			};
 
 			node['set' + capName] = function (value) {
-				if (!_mejs2.default.html5media.readOnlyProperties.includes(propName)) {
-					if (flvPlayer !== null) {
-						node[propName] = value;
+				if (_mejs2.default.html5media.readOnlyProperties.indexOf(propName) === -1) {
+					if (propName === 'src') {
+						node[propName] = (typeof value === 'undefined' ? 'undefined' : _typeof(value)) === 'object' && value.src ? value.src : value;
+						if (flvPlayer !== null) {
+							var _flvOptions = {};
+							_flvOptions.type = 'flv';
+							_flvOptions.url = value;
+							_flvOptions.cors = options.flv.cors;
+							_flvOptions.debug = options.flv.debug;
+							_flvOptions.path = options.flv.path;
+							var _flvConfigs = options.flv.configs;
 
-						if (propName === 'src') {
-							flvPlayer.unload();
-							flvPlayer.detachMediaElement();
+							flvPlayer.destroy();
+							for (var i = 0, total = events.length; i < total; i++) {
+								node.removeEventListener(events[i], attachNativeEvents);
+							}
+							flvPlayer = NativeFlv._createPlayer({
+								options: _flvOptions,
+								configs: _flvConfigs,
+								id: id
+							});
 							flvPlayer.attachMediaElement(node);
 							flvPlayer.load();
 						}
+					} else {
+						node[propName] = value;
 					}
 				}
 			};
@@ -6339,31 +6360,50 @@ var FlvNativeRenderer = {
 			assignGettersSetters(props[i]);
 		}
 
-		// Initial method to register all FLV events
 		_window2.default['__ready__' + id] = function (_flvPlayer) {
-
 			mediaElement.flvPlayer = flvPlayer = _flvPlayer;
 
-			var events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']),
+			var flvEvents = flvjs.Events,
 			    assignEvents = function assignEvents(eventName) {
-
 				if (eventName === 'loadedmetadata') {
-
 					flvPlayer.unload();
 					flvPlayer.detachMediaElement();
 					flvPlayer.attachMediaElement(node);
 					flvPlayer.load();
 				}
 
-				node.addEventListener(eventName, function (e) {
-					var event = _document2.default.createEvent('HTMLEvents');
-					event.initEvent(e.type, e.bubbles, e.cancelable);
-					mediaElement.dispatchEvent(event);
-				});
+				node.addEventListener(eventName, attachNativeEvents);
 			};
 
 			for (var _i = 0, _total = events.length; _i < _total; _i++) {
 				assignEvents(events[_i]);
+			}
+
+			var assignFlvEvents = function assignFlvEvents(name, data) {
+				if (name === 'error') {
+					var message = data[0] + ': ' + data[1] + ' ' + data[2].msg;
+					mediaElement.generateError(message, node.src);
+				} else {
+					var _event = (0, _general.createEvent)(name, mediaElement);
+					_event.data = data;
+					mediaElement.dispatchEvent(_event);
+				}
+			};
+
+			var _loop = function _loop(eventType) {
+				if (flvEvents.hasOwnProperty(eventType)) {
+					flvPlayer.on(flvEvents[eventType], function () {
+						for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
+							args[_key] = arguments[_key];
+						}
+
+						return assignFlvEvents(flvEvents[eventType], args);
+					});
+				}
+			};
+
+			for (var eventType in flvEvents) {
+				_loop(eventType);
 			}
 		};
 
@@ -6379,19 +6419,17 @@ var FlvNativeRenderer = {
 		node.setAttribute('id', id);
 
 		originalNode.parentNode.insertBefore(node, originalNode);
-		originalNode.removeAttribute('autoplay');
+		originalNode.autoplay = false;
 		originalNode.style.display = 'none';
 
-		// Options that cannot be overridden
-		options.flv.type = 'flv';
-		options.flv.url = node.getAttribute('src');
+		var flvOptions = {};
+		flvOptions.type = 'flv';
+		flvOptions.url = node.src;
+		flvOptions.cors = options.flv.cors;
+		flvOptions.debug = options.flv.debug;
+		flvOptions.path = options.flv.path;
+		var flvConfigs = options.flv.configs;
 
-		NativeFlv.prepareSettings({
-			options: options.flv,
-			id: id
-		});
-
-		// HELPER METHODS
 		node.setSize = function (width, height) {
 			node.style.width = width + 'px';
 			node.style.height = height + 'px';
@@ -6399,7 +6437,9 @@ var FlvNativeRenderer = {
 		};
 
 		node.hide = function () {
-			flvPlayer.pause();
+			if (flvPlayer !== null) {
+				flvPlayer.pause();
+			}
 			node.style.display = 'none';
 			return node;
 		};
@@ -6410,148 +6450,79 @@ var FlvNativeRenderer = {
 		};
 
 		node.destroy = function () {
-			flvPlayer.destroy();
+			if (flvPlayer !== null) {
+				flvPlayer.destroy();
+			}
 		};
 
 		var event = (0, _general.createEvent)('rendererready', node);
 		mediaElement.dispatchEvent(event);
 
+		mediaElement.promises.push(NativeFlv.load({
+			options: flvOptions,
+			configs: flvConfigs,
+			id: id
+		}));
+
 		return node;
 	}
 };
 
-/**
- * Register Native FLV type based on URL structure
- *
- */
 _media.typeChecks.push(function (url) {
-	url = url.toLowerCase();
-	return url.includes('.flv') ? 'video/flv' : null;
+	return ~url.toLowerCase().indexOf('.flv') ? 'video/flv' : null;
 });
 
 _renderer.renderer.add(FlvNativeRenderer);
 
-},{"2":2,"23":23,"24":24,"25":25,"3":3,"6":6,"7":7}],20:[function(_dereq_,module,exports){
+},{"25":25,"26":26,"27":27,"28":28,"3":3,"7":7,"8":8}],22:[function(_dereq_,module,exports){
 'use strict';
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 var _window = _dereq_(3);
 
 var _window2 = _interopRequireDefault(_window);
 
-var _document = _dereq_(2);
-
-var _document2 = _interopRequireDefault(_document);
-
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Native HLS renderer
- *
- * Uses DailyMotion's hls.js, which is a JavaScript library which implements an HTTP Live Streaming client.
- * It relies on HTML5 video and MediaSource Extensions for playback.
- * This renderer integrates new events associated with m3u8 files the same way Flash version of Hls does.
- * @see https://github.com/dailymotion/hls.js
- *
- */
 var NativeHls = {
-	/**
-  * @type {Boolean}
-  */
-	isMediaStarted: false,
-	/**
-  * @type {Boolean}
-  */
-	isMediaLoaded: false,
-	/**
-  * @type {Array}
-  */
-	creationQueue: [],
 
-	/**
-  * Create a queue to prepare the loading of an HLS source
-  *
-  * @param {Object} settings - an object with settings needed to load an HLS player instance
-  */
-	prepareSettings: function prepareSettings(settings) {
-		if (NativeHls.isLoaded) {
-			NativeHls.createInstance(settings);
-		} else {
-			NativeHls.loadScript(settings);
-			NativeHls.creationQueue.push(settings);
-		}
-	},
+	promise: null,
 
-	/**
-  * Load hls.js script on the header of the document
-  *
-  * @param {Object} settings - an object with settings needed to load an HLS player instance
-  */
-	loadScript: function loadScript(settings) {
-
-		// Skip script loading since it is already loaded
+	load: function load(settings) {
 		if (typeof Hls !== 'undefined') {
-			NativeHls.createInstance(settings);
-		} else if (!NativeHls.isMediaStarted) {
-			(function () {
+			NativeHls.promise = new Promise(function (resolve) {
+				resolve();
+			}).then(function () {
+				NativeHls._createPlayer(settings);
+			});
+		} else {
+			settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : 'https://cdn.jsdelivr.net/npm/hls.js@latest';
 
-				settings.options.path = typeof settings.options.path === 'string' ? settings.options.path : '//cdn.jsdelivr.net/hls.js/latest/hls.min.js';
-
-				var script = _document2.default.createElement('script'),
-				    firstScriptTag = _document2.default.getElementsByTagName('script')[0];
-
-				var done = false;
-
-				script.src = settings.options.path;
-
-				// Attach handlers for all browsers
-				script.onload = script.onreadystatechange = function () {
-					if (!done && (!this.readyState || this.readyState === undefined || this.readyState === 'loaded' || this.readyState === 'complete')) {
-						done = true;
-						NativeHls.mediaReady();
-						script.onload = script.onreadystatechange = null;
-					}
-				};
-
-				firstScriptTag.parentNode.insertBefore(script, firstScriptTag);
-				NativeHls.isMediaStarted = true;
-			})();
+			NativeHls.promise = NativeHls.promise || (0, _dom.loadScript)(settings.options.path);
+			NativeHls.promise.then(function () {
+				NativeHls._createPlayer(settings);
+			});
 		}
+
+		return NativeHls.promise;
 	},
 
-	/**
-  * Process queue of HLS player creation
-  *
-  */
-	mediaReady: function mediaReady() {
-		NativeHls.isLoaded = true;
-		NativeHls.isMediaLoaded = true;
-
-		while (NativeHls.creationQueue.length > 0) {
-			var settings = NativeHls.creationQueue.pop();
-			NativeHls.createInstance(settings);
-		}
-	},
-
-	/**
-  * Create a new instance of HLS player and trigger a custom event to initialize it
-  *
-  * @param {Object} settings - an object with settings needed to instantiate HLS object
-  * @return {Hls}
-  */
-	createInstance: function createInstance(settings) {
-		
+	_createPlayer: function _createPlayer(settings) {
 		var player = new Hls(settings.options);
 		_window2.default['__ready__' + settings.id](player);
 		return player;
@@ -6560,53 +6531,44 @@ var NativeHls = {
 
 var HlsNativeRenderer = {
 	name: 'native_hls',
-
 	options: {
 		prefix: 'native_hls',
 		hls: {
-			// Special config: used to set the local path/URL of hls.js library
-			path: '//cdn.jsdelivr.net/hls.js/latest/hls.min.js',
-			// To modify more elements from hls.js,
-			// see https://github.com/dailymotion/hls.js/blob/master/API.md#user-content-fine-tuning
+			path: 'https://cdn.jsdelivr.net/npm/hls.js@latest',
+
 			autoStartLoad: false,
 			debug: false
 		}
 	},
 
-	/**
-  * Determine if a specific element type can be played with this render
-  *
-  * @param {String} type
-  * @return {Boolean}
-  */
 	canPlayType: function canPlayType(type) {
-		return _constants.HAS_MSE && ['application/x-mpegurl', 'vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].includes(type.toLowerCase());
+		return _constants.HAS_MSE && ['application/x-mpegurl', 'application/vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].indexOf(type.toLowerCase()) > -1;
 	},
 
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
 	create: function create(mediaElement, options, mediaFiles) {
 
 		var originalNode = mediaElement.originalNode,
 		    id = mediaElement.id + '_' + options.prefix,
 		    preload = originalNode.getAttribute('preload'),
-		    autoplay = originalNode.getAttribute('autoplay');
+		    autoplay = originalNode.autoplay;
 
 		var hlsPlayer = null,
-		    node = null;
+		    node = null,
+		    index = 0,
+		    total = mediaFiles.length;
 
 		node = originalNode.cloneNode(true);
 		options = Object.assign(options, mediaElement.options);
-		options.autoStartLoad = preload === 'auto';
+		options.hls.autoStartLoad = preload && preload !== 'none' || autoplay;
 
-		// WRAPPERS for PROPs
 		var props = _mejs2.default.html5media.properties,
+		    events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']).filter(function (e) {
+			return e !== 'error';
+		}),
+		    attachNativeEvents = function attachNativeEvents(e) {
+			var event = (0, _general.createEvent)(e.type, mediaElement);
+			mediaElement.dispatchEvent(event);
+		},
 		    assignGettersSetters = function assignGettersSetters(propName) {
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
 
@@ -6615,93 +6577,57 @@ var HlsNativeRenderer = {
 			};
 
 			node['set' + capName] = function (value) {
-				if (!_mejs2.default.html5media.readOnlyProperties.includes(propName)) {
-					if (hlsPlayer !== null) {
-						node[propName] = value;
-
-						if (propName === 'src') {
-
+				if (_mejs2.default.html5media.readOnlyProperties.indexOf(propName) === -1) {
+					if (propName === 'src') {
+						node[propName] = (typeof value === 'undefined' ? 'undefined' : _typeof(value)) === 'object' && value.src ? value.src : value;
+						if (hlsPlayer !== null) {
 							hlsPlayer.destroy();
-							hlsPlayer = NativeHls.createInstance({
+							for (var i = 0, _total = events.length; i < _total; i++) {
+								node.removeEventListener(events[i], attachNativeEvents);
+							}
+							hlsPlayer = NativeHls._createPlayer({
 								options: options.hls,
 								id: id
 							});
-
-							hlsPlayer.attachMedia(node);
 							hlsPlayer.loadSource(value);
-
-							if (autoplay) {
-								hlsPlayer.on(hlsEvents.MANIFEST_PARSED, function () {
-									node.play();
-								});
-							}
+							hlsPlayer.attachMedia(node);
 						}
+					} else {
+						node[propName] = value;
 					}
 				}
 			};
 		};
 
-		for (var i = 0, total = props.length; i < total; i++) {
+		for (var i = 0, _total2 = props.length; i < _total2; i++) {
 			assignGettersSetters(props[i]);
 		}
 
-		// Initial method to register all HLS events
 		_window2.default['__ready__' + id] = function (_hlsPlayer) {
-
 			mediaElement.hlsPlayer = hlsPlayer = _hlsPlayer;
-
-			var events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']),
-			    hlsEvents = Hls.Events,
+			var hlsEvents = Hls.Events,
 			    assignEvents = function assignEvents(eventName) {
-
 				if (eventName === 'loadedmetadata') {
-
+					var url = mediaElement.originalNode.src;
 					hlsPlayer.detachMedia();
-
-					var url = node.src;
-
-					hlsPlayer.attachMedia(node);
 					hlsPlayer.loadSource(url);
-					if (autoplay) {
-						hlsPlayer.on(hlsEvents.MANIFEST_PARSED, function () {
-							node.play();
-						});
-					}
+					hlsPlayer.attachMedia(node);
 				}
 
-				node.addEventListener(eventName, function (e) {
-					// copy event
-					var event = _document2.default.createEvent('HTMLEvents');
-					event.initEvent(e.type, e.bubbles, e.cancelable);
-					mediaElement.dispatchEvent(event);
-				});
+				node.addEventListener(eventName, attachNativeEvents);
 			};
 
-			for (var _i = 0, _total = events.length; _i < _total; _i++) {
+			for (var _i = 0, _total3 = events.length; _i < _total3; _i++) {
 				assignEvents(events[_i]);
 			}
 
-			/**
-    * Custom HLS events
-    *
-    * These events can be attached to the original node using addEventListener and the name of the event,
-    * not using Hls.Events object
-    * @see https://github.com/dailymotion/hls.js/blob/master/src/events.js
-    * @see https://github.com/dailymotion/hls.js/blob/master/src/errors.js
-    * @see https://github.com/dailymotion/hls.js/blob/master/API.md#runtime-events
-    * @see https://github.com/dailymotion/hls.js/blob/master/API.md#errors
-    */
 			var recoverDecodingErrorDate = void 0,
 			    recoverSwapAudioCodecDate = void 0;
-			var assignHlsEvents = function assignHlsEvents(e, data) {
-				var event = (0, _general.createEvent)(e, node);
-				event.data = data;
-				mediaElement.dispatchEvent(event);
+			var assignHlsEvents = function assignHlsEvents(name, data) {
+				if (name === 'hlsError') {
+					console.warn(data);
+					data = data[1];
 
-				if (e === 'hlsError') {
-					console.error(e, data);
-
-					// borrowed from http://dailymotion.github.io/hls.js/demo/
 					if (data.fatal) {
 						switch (data.type) {
 							case 'mediaError':
@@ -6715,63 +6641,89 @@ var HlsNativeRenderer = {
 									hlsPlayer.swapAudioCodec();
 									hlsPlayer.recoverMediaError();
 								} else {
-									console.error('Cannot recover, last media error recovery failed');
+									var message = 'Cannot recover, last media error recovery failed';
+									mediaElement.generateError(message, node.src);
+									console.error(message);
 								}
 								break;
 							case 'networkError':
-								console.error('Network error');
+								if (data.details === 'manifestLoadError') {
+									if (index < total && mediaFiles[index + 1] !== undefined) {
+										node.setSrc(mediaFiles[index++].src);
+										node.load();
+										node.play();
+									} else {
+										var _message = 'Network error';
+										mediaElement.generateError(_message, mediaFiles);
+										console.error(_message);
+									}
+								} else {
+									var _message2 = 'Network error';
+									mediaElement.generateError(_message2, mediaFiles);
+									console.error(_message2);
+								}
 								break;
 							default:
 								hlsPlayer.destroy();
 								break;
-
 						}
 					}
+				} else {
+					var _event = (0, _general.createEvent)(name, mediaElement);
+					_event.data = data;
+					mediaElement.dispatchEvent(_event);
+				}
+			};
+
+			var _loop = function _loop(eventType) {
+				if (hlsEvents.hasOwnProperty(eventType)) {
+					hlsPlayer.on(hlsEvents[eventType], function () {
+						for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
+							args[_key] = arguments[_key];
+						}
+
+						return assignHlsEvents(hlsEvents[eventType], args);
+					});
 				}
 			};
 
 			for (var eventType in hlsEvents) {
-				if (hlsEvents.hasOwnProperty(eventType)) {
-					hlsPlayer.on(hlsEvents[eventType], assignHlsEvents);
-				}
+				_loop(eventType);
 			}
 		};
 
-		if (mediaFiles && mediaFiles.length > 0) {
-			for (var _i2 = 0, _total2 = mediaFiles.length; _i2 < _total2; _i2++) {
-				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[_i2].type)) {
-					node.setAttribute('src', mediaFiles[_i2].src);
+		if (total > 0) {
+			for (; index < total; index++) {
+				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[index].type)) {
+					node.setAttribute('src', mediaFiles[index].src);
 					break;
 				}
 			}
 		}
 
-		if (preload !== 'auto') {
+		if (preload !== 'auto' && !autoplay) {
 			node.addEventListener('play', function () {
-				hlsPlayer.startLoad();
-			}, false);
+				if (hlsPlayer !== null) {
+					hlsPlayer.startLoad();
+				}
+			});
 
 			node.addEventListener('pause', function () {
-				hlsPlayer.stopLoad();
-			}, false);
+				if (hlsPlayer !== null) {
+					hlsPlayer.stopLoad();
+				}
+			});
 		}
 
 		node.setAttribute('id', id);
 
 		originalNode.parentNode.insertBefore(node, originalNode);
-		originalNode.removeAttribute('autoplay');
+		originalNode.autoplay = false;
 		originalNode.style.display = 'none';
 
-		NativeHls.prepareSettings({
-			options: options.hls,
-			id: id
-		});
-
-		// HELPER METHODS
 		node.setSize = function (width, height) {
 			node.style.width = width + 'px';
 			node.style.height = height + 'px';
-
 			return node;
 		};
 
@@ -6787,32 +6739,31 @@ var HlsNativeRenderer = {
 		};
 
 		node.destroy = function () {
-			hlsPlayer.destroy();
-		};
-
-		node.stop = function () {
-			hlsPlayer.stopLoad();
+			if (hlsPlayer !== null) {
+				hlsPlayer.stopLoad();
+				hlsPlayer.destroy();
+			}
 		};
 
 		var event = (0, _general.createEvent)('rendererready', node);
 		mediaElement.dispatchEvent(event);
 
+		mediaElement.promises.push(NativeHls.load({
+			options: options.hls,
+			id: id
+		}));
+
 		return node;
 	}
 };
 
-/**
- * Register Native HLS type based on URL structure
- *
- */
 _media.typeChecks.push(function (url) {
-	url = url.toLowerCase();
-	return url.includes('.m3u8') ? 'application/x-mpegURL' : null;
+	return ~url.toLowerCase().indexOf('.m3u8') ? 'application/x-mpegURL' : null;
 });
 
 _renderer.renderer.add(HlsNativeRenderer);
 
-},{"2":2,"23":23,"24":24,"25":25,"3":3,"6":6,"7":7}],21:[function(_dereq_,module,exports){
+},{"25":25,"26":26,"27":27,"28":28,"3":3,"7":7,"8":8}],23:[function(_dereq_,module,exports){
 'use strict';
 
 var _window = _dereq_(3);
@@ -6823,66 +6774,44 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _constants = _dereq_(23);
+var _constants = _dereq_(25);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Native HTML5 Renderer
- *
- * Wraps the native HTML5 <audio> or <video> tag and bubbles its properties, events, and methods up to the mediaElement.
- */
 var HtmlMediaElement = {
-
 	name: 'html5',
-
 	options: {
 		prefix: 'html5'
 	},
 
-	/**
-  * Determine if a specific element type can be played with this render
-  *
-  * @param {String} type
-  * @return {String}
-  */
 	canPlayType: function canPlayType(type) {
 
 		var mediaElement = _document2.default.createElement('video');
 
-		// Due to an issue on Webkit, force the MP3 and MP4 on Android and consider native support for HLS;
-		// also consider URLs that might have obfuscated URLs
-		if (_constants.IS_ANDROID && type.match(/\/mp(3|4)$/gi) !== null || ['application/x-mpegurl', 'vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].includes(type.toLowerCase()) && _constants.SUPPORTS_NATIVE_HLS) {
+		if (_constants.IS_ANDROID && /\/mp(3|4)$/i.test(type) || ~['application/x-mpegurl', 'vnd.apple.mpegurl', 'audio/mpegurl', 'audio/hls', 'video/hls'].indexOf(type.toLowerCase()) && _constants.SUPPORTS_NATIVE_HLS) {
 			return 'yes';
 		} else if (mediaElement.canPlayType) {
-			return mediaElement.canPlayType(type).replace(/no/, '');
+			return mediaElement.canPlayType(type.toLowerCase()).replace(/no/, '');
 		} else {
 			return '';
 		}
 	},
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
+
 	create: function create(mediaElement, options, mediaFiles) {
 
 		var id = mediaElement.id + '_' + options.prefix;
+		var isActive = false;
 
 		var node = null;
 
-		// CREATE NODE
 		if (mediaElement.originalNode === undefined || mediaElement.originalNode === null) {
 			node = _document2.default.createElement('audio');
 			mediaElement.appendChild(node);
@@ -6892,7 +6821,6 @@ var HtmlMediaElement = {
 
 		node.setAttribute('id', id);
 
-		// WRAPPERS for PROPs
 		var props = _mejs2.default.html5media.properties,
 		    assignGettersSetters = function assignGettersSetters(propName) {
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
@@ -6902,60 +6830,74 @@ var HtmlMediaElement = {
 			};
 
 			node['set' + capName] = function (value) {
-				if (!_mejs2.default.html5media.readOnlyProperties.includes(propName)) {
+				if (_mejs2.default.html5media.readOnlyProperties.indexOf(propName) === -1) {
 					node[propName] = value;
 				}
 			};
 		};
 
-		for (var i = 0, total = props.length; i < total; i++) {
+		for (var i = 0, _total = props.length; i < _total; i++) {
 			assignGettersSetters(props[i]);
 		}
 
-		var events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']),
+		var events = _mejs2.default.html5media.events.concat(['click', 'mouseover', 'mouseout']).filter(function (e) {
+			return e !== 'error';
+		}),
 		    assignEvents = function assignEvents(eventName) {
-
 			node.addEventListener(eventName, function (e) {
-				// copy event
-
-				var event = _document2.default.createEvent('HTMLEvents');
-				event.initEvent(e.type, e.bubbles, e.cancelable);
-				mediaElement.dispatchEvent(event);
+				if (isActive) {
+					var _event = (0, _general.createEvent)(e.type, e.target);
+					mediaElement.dispatchEvent(_event);
+				}
 			});
 		};
 
-		for (var _i = 0, _total = events.length; _i < _total; _i++) {
+		for (var _i = 0, _total2 = events.length; _i < _total2; _i++) {
 			assignEvents(events[_i]);
 		}
 
-		// HELPER METHODS
 		node.setSize = function (width, height) {
 			node.style.width = width + 'px';
 			node.style.height = height + 'px';
-
 			return node;
 		};
 
 		node.hide = function () {
+			isActive = false;
 			node.style.display = 'none';
 
 			return node;
 		};
 
 		node.show = function () {
+			isActive = true;
 			node.style.display = '';
 
 			return node;
 		};
 
-		if (mediaFiles && mediaFiles.length > 0) {
-			for (var _i2 = 0, _total2 = mediaFiles.length; _i2 < _total2; _i2++) {
-				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[_i2].type)) {
-					node.setAttribute('src', mediaFiles[_i2].src);
+		var index = 0,
+		    total = mediaFiles.length;
+		if (total > 0) {
+			for (; index < total; index++) {
+				if (_renderer.renderer.renderers[options.prefix].canPlayType(mediaFiles[index].type)) {
+					node.setAttribute('src', mediaFiles[index].src);
 					break;
 				}
 			}
 		}
+
+		node.addEventListener('error', function (e) {
+			if (e.target.error.code === 4 && isActive) {
+				if (index < total && mediaFiles[index + 1] !== undefined) {
+					node.src = mediaFiles[index++].src;
+					node.load();
+					node.play();
+				} else {
+					mediaElement.generateError('Media error: Format(s) not supported or source(s) not found', mediaFiles);
+				}
+			}
+		});
 
 		var event = (0, _general.createEvent)('rendererready', node);
 		mediaElement.dispatchEvent(event);
@@ -6968,10 +6910,8 @@ _window2.default.HtmlMediaElement = _mejs2.default.HtmlMediaElement = HtmlMediaE
 
 _renderer.renderer.add(HtmlMediaElement);
 
-},{"2":2,"23":23,"24":24,"3":3,"6":6,"7":7}],22:[function(_dereq_,module,exports){
+},{"2":2,"25":25,"27":27,"3":3,"7":7,"8":8}],24:[function(_dereq_,module,exports){
 'use strict';
-
-var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 var _window = _dereq_(3);
 
@@ -6981,48 +6921,28 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _renderer = _dereq_(7);
+var _renderer = _dereq_(8);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
-var _media = _dereq_(25);
+var _media = _dereq_(28);
+
+var _dom = _dereq_(26);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * YouTube renderer
- *
- * Uses <iframe> approach and uses YouTube API to manipulate it.
- * Note: IE6-7 don't have postMessage so don't support <iframe> API, and IE8 doesn't fire the onReady event,
- * so it doesn't work - not sure if Google problem or not.
- * @see https://developers.google.com/youtube/iframe_api_reference
- */
 var YouTubeApi = {
-	/**
-  * @type {Boolean}
-  */
 	isIframeStarted: false,
-	/**
-  * @type {Boolean}
-  */
+
 	isIframeLoaded: false,
-	/**
-  * @type {Array}
-  */
+
 	iframeQueue: [],
 
-	/**
-  * Create a queue to prepare the creation of <iframe>
-  *
-  * @param {Object} settings - an object with settings needed to create <iframe>
-  */
 	enqueueIframe: function enqueueIframe(settings) {
-
-		// Check whether YouTube API is already loaded.
 		YouTubeApi.isLoaded = typeof YT !== 'undefined' && YT.loaded;
 
 		if (YouTubeApi.isLoaded) {
@@ -7033,24 +6953,13 @@ var YouTubeApi = {
 		}
 	},
 
-	/**
-  * Load YouTube API script on the header of the document
-  *
-  */
 	loadIframeApi: function loadIframeApi() {
 		if (!YouTubeApi.isIframeStarted) {
-			var tag = _document2.default.createElement('script');
-			tag.src = '//www.youtube.com/player_api';
-			var firstScriptTag = _document2.default.getElementsByTagName('script')[0];
-			firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+			(0, _dom.loadScript)('https://www.youtube.com/player_api');
 			YouTubeApi.isIframeStarted = true;
 		}
 	},
 
-	/**
-  * Process queue of YouTube <iframe> element creation
-  *
-  */
 	iFrameReady: function iFrameReady() {
 
 		YouTubeApi.isLoaded = true;
@@ -7062,35 +6971,17 @@ var YouTubeApi = {
 		}
 	},
 
-	/**
-  * Create a new instance of YouTube API player and trigger a custom event to initialize it
-  *
-  * @param {Object} settings - an object with settings needed to create <iframe>
-  */
 	createIframe: function createIframe(settings) {
 		return new YT.Player(settings.containerId, settings);
 	},
 
-	/**
-  * Extract ID from YouTube's URL to be loaded through API
-  * Valid URL format(s):
-  * - http://www.youtube.com/watch?feature=player_embedded&v=yyWWXSwtPP0
-  * - http://www.youtube.com/v/VIDEO_ID?version=3
-  * - http://youtu.be/Djd6tPrxc08
-  * - http://www.youtube-nocookie.com/watch?feature=player_embedded&v=yyWWXSwtPP0
-  *
-  * @param {String} url
-  * @return {string}
-  */
 	getYouTubeId: function getYouTubeId(url) {
 
 		var youTubeId = '';
 
 		if (url.indexOf('?') > 0) {
-			// assuming: http://www.youtube.com/watch?feature=player_embedded&v=yyWWXSwtPP0
 			youTubeId = YouTubeApi.getYouTubeIdFromParam(url);
 
-			// if it's http://www.youtube.com/v/VIDEO_ID?version=3
 			if (youTubeId === '') {
 				youTubeId = YouTubeApi.getYouTubeIdFromUrl(url);
 			}
@@ -7098,15 +6989,11 @@ var YouTubeApi = {
 			youTubeId = YouTubeApi.getYouTubeIdFromUrl(url);
 		}
 
-		return youTubeId;
+		var id = youTubeId.substring(youTubeId.lastIndexOf('/') + 1);
+		youTubeId = id.split('?');
+		return youTubeId[0];
 	},
 
-	/**
-  * Get ID from URL with format: http://www.youtube.com/watch?feature=player_embedded&v=yyWWXSwtPP0
-  *
-  * @param {String} url
-  * @returns {string}
-  */
 	getYouTubeIdFromParam: function getYouTubeIdFromParam(url) {
 
 		if (url === undefined || url === null || !url.trim().length) {
@@ -7129,13 +7016,6 @@ var YouTubeApi = {
 		return youTubeId;
 	},
 
-	/**
-  * Get ID from URL with formats
-  *  - http://www.youtube.com/v/VIDEO_ID?version=3
-  *  - http://youtu.be/Djd6tPrxc08
-  * @param {String} url
-  * @return {?String}
-  */
 	getYouTubeIdFromUrl: function getYouTubeIdFromUrl(url) {
 
 		if (url === undefined || url === null || !url.trim().length) {
@@ -7147,13 +7027,8 @@ var YouTubeApi = {
 		return url.substring(url.lastIndexOf('/') + 1);
 	},
 
-	/**
-  * Inject `no-cookie` element to URL. Only works with format: http://www.youtube.com/v/VIDEO_ID?version=3
-  * @param {String} url
-  * @return {?String}
-  */
 	getYouTubeNoCookieUrl: function getYouTubeNoCookieUrl(url) {
-		if (url === undefined || url === null || !url.trim().length || !url.includes('//www.youtube')) {
+		if (url === undefined || url === null || !url.trim().length || url.indexOf('//www.youtube') === -1) {
 			return url;
 		}
 
@@ -7168,12 +7043,7 @@ var YouTubeIframeRenderer = {
 
 	options: {
 		prefix: 'youtube_iframe',
-		/**
-   * Custom configuration for YouTube player
-   *
-   * @see https://developers.google.com/youtube/player_parameters#Parameters
-   * @type {Object}
-   */
+
 		youtube: {
 			autoplay: 0,
 			controls: 0,
@@ -7186,32 +7056,19 @@ var YouTubeIframeRenderer = {
 			showinfo: 0,
 			start: 0,
 			iv_load_policy: 3,
-			// custom to inject `-nocookie` element in URL
-			nocookie: false
+
+			nocookie: false,
+
+			imageQuality: null
 		}
 	},
 
-	/**
-  * Determine if a specific element type can be played with this render
-  *
-  * @param {String} type
-  * @return {Boolean}
-  */
 	canPlayType: function canPlayType(type) {
-		return ['video/youtube', 'video/x-youtube'].includes(type);
+		return ~['video/youtube', 'video/x-youtube'].indexOf(type.toLowerCase());
 	},
 
-	/**
-  * Create the player instance and add all native events/methods/properties as possible
-  *
-  * @param {MediaElement} mediaElement Instance of mejs.MediaElement already created
-  * @param {Object} options All the player configuration options passed through constructor
-  * @param {Object[]} mediaFiles List of sources with format: {src: url, type: x/y-z}
-  * @return {Object}
-  */
 	create: function create(mediaElement, options, mediaFiles) {
 
-		// API objects
 		var youtube = {},
 		    apiStack = [],
 		    readyState = 4;
@@ -7226,11 +7083,8 @@ var YouTubeIframeRenderer = {
 		youtube.id = mediaElement.id + '_' + options.prefix;
 		youtube.mediaElement = mediaElement;
 
-		// wrappers for get/set
 		var props = _mejs2.default.html5media.properties,
 		    assignGettersSetters = function assignGettersSetters(propName) {
-
-			// add to flash state that we will store
 
 			var capName = '' + propName.substring(0, 1).toUpperCase() + propName.substring(1);
 
@@ -7238,68 +7092,38 @@ var YouTubeIframeRenderer = {
 				if (youTubeApi !== null) {
 					var value = null;
 
-					// figure out how to get youtube dta here
+					switch (propName) {
+						case 'currentTime':
+							return youTubeApi.getCurrentTime();
+						case 'duration':
+							return youTubeApi.getDuration();
+						case 'volume':
+							volume = youTubeApi.getVolume() / 100;
+							return volume;
+						case 'paused':
+							return paused;
+						case 'ended':
+							return ended;
+						case 'muted':
+							return youTubeApi.isMuted();
+						case 'buffered':
+							var percentLoaded = youTubeApi.getVideoLoadedFraction(),
+							    duration = youTubeApi.getDuration();
+							return {
+								start: function start() {
+									return 0;
+								},
+								end: function end() {
+									return percentLoaded * duration;
+								},
+								length: 1
+							};
+						case 'src':
+							return youTubeApi.getVideoUrl();
+						case 'readyState':
+							return readyState;
+					}
 
-					var _ret = function () {
-						switch (propName) {
-							case 'currentTime':
-								return {
-									v: youTubeApi.getCurrentTime()
-								};
-
-							case 'duration':
-								return {
-									v: youTubeApi.getDuration()
-								};
-
-							case 'volume':
-								volume = youTubeApi.getVolume() / 100;
-								return {
-									v: volume
-								};
-
-							case 'paused':
-								return {
-									v: paused
-								};
-
-							case 'ended':
-								return {
-									v: ended
-								};
-
-							case 'muted':
-								return {
-									v: youTubeApi.isMuted()
-								};
-
-							case 'buffered':
-								var percentLoaded = youTubeApi.getVideoLoadedFraction(),
-								    duration = youTubeApi.getDuration();
-								return {
-									v: {
-										start: function start() {
-											return 0;
-										},
-										end: function end() {
-											return percentLoaded * duration;
-										},
-										length: 1
-									}
-								};
-							case 'src':
-								return {
-									v: youTubeApi.getVideoUrl()
-								};
-
-							case 'readyState':
-								return {
-									v: readyState
-								};
-						}
-					}();
-
-					if ((typeof _ret === 'undefined' ? 'undefined' : _typeof(_ret)) === "object") return _ret.v;
 					return value;
 				} else {
 					return null;
@@ -7307,27 +7131,21 @@ var YouTubeIframeRenderer = {
 			};
 
 			youtube['set' + capName] = function (value) {
-
 				if (youTubeApi !== null) {
-
-					// do something
 					switch (propName) {
-
 						case 'src':
 							var url = typeof value === 'string' ? value : value[0].src,
 							    _videoId = YouTubeApi.getYouTubeId(url);
 
-							if (mediaElement.getAttribute('autoplay')) {
+							if (mediaElement.originalNode.autoplay) {
 								youTubeApi.loadVideoById(_videoId);
 							} else {
 								youTubeApi.cueVideoById(_videoId);
 							}
 							break;
-
 						case 'currentTime':
 							youTubeApi.seekTo(value);
 							break;
-
 						case 'muted':
 							if (value) {
 								youTubeApi.mute();
@@ -7339,7 +7157,6 @@ var YouTubeIframeRenderer = {
 								mediaElement.dispatchEvent(event);
 							}, 50);
 							break;
-
 						case 'volume':
 							volume = value;
 							youTubeApi.setVolume(value * 100);
@@ -7352,13 +7169,11 @@ var YouTubeIframeRenderer = {
 							var event = (0, _general.createEvent)('canplay', youtube);
 							mediaElement.dispatchEvent(event);
 							break;
-
 						default:
 							
 							break;
 					}
 				} else {
-					// store for after "READY" event fires
 					apiStack.push({ type: 'set', propName: propName, value: value });
 				}
 			};
@@ -7368,16 +7183,10 @@ var YouTubeIframeRenderer = {
 			assignGettersSetters(props[i]);
 		}
 
-		// add wrappers for native methods
 		var methods = _mejs2.default.html5media.methods,
 		    assignMethods = function assignMethods(methodName) {
-
-			// run the method on the native HTMLMediaElement
 			youtube[methodName] = function () {
-
 				if (youTubeApi !== null) {
-
-					// DO method
 					switch (methodName) {
 						case 'play':
 							paused = false;
@@ -7387,7 +7196,6 @@ var YouTubeIframeRenderer = {
 							return youTubeApi.pauseVideo();
 						case 'load':
 							return null;
-
 					}
 				} else {
 					apiStack.push({ type: 'call', methodName: methodName });
@@ -7399,21 +7207,42 @@ var YouTubeIframeRenderer = {
 			assignMethods(methods[_i]);
 		}
 
-		// CREATE YouTube
+		var errorHandler = function errorHandler(error) {
+			var message = '';
+			switch (error.data) {
+				case 2:
+					message = 'The request contains an invalid parameter value. Verify that video ID has 11 characters and that contains no invalid characters, such as exclamation points or asterisks.';
+					break;
+				case 5:
+					message = 'The requested content cannot be played in an HTML5 player or another error related to the HTML5 player has occurred.';
+					break;
+				case 100:
+					message = 'The video requested was not found. Either video has been removed or has been marked as private.';
+					break;
+				case 101:
+				case 105:
+					message = 'The owner of the requested video does not allow it to be played in embedded players.';
+					break;
+				default:
+					message = 'Unknown error.';
+					break;
+			}
+			mediaElement.generateError('Code ' + error.data + ': ' + message, mediaFiles);
+		};
+
 		var youtubeContainer = _document2.default.createElement('div');
 		youtubeContainer.id = youtube.id;
 
-		// If `nocookie` feature was enabled, modify original URL
 		if (youtube.options.youtube.nocookie) {
-			mediaElement.originalNode.setAttribute('src', YouTubeApi.getYouTubeNoCookieUrl(mediaFiles[0].src));
+			mediaElement.originalNode.src = YouTubeApi.getYouTubeNoCookieUrl(mediaFiles[0].src);
 		}
 
 		mediaElement.originalNode.parentNode.insertBefore(youtubeContainer, mediaElement.originalNode);
 		mediaElement.originalNode.style.display = 'none';
 
 		var isAudio = mediaElement.originalNode.tagName.toLowerCase() === 'audio',
-		    height = isAudio ? '0' : mediaElement.originalNode.height,
-		    width = isAudio ? '0' : mediaElement.originalNode.width,
+		    height = isAudio ? '1' : mediaElement.originalNode.height,
+		    width = isAudio ? '1' : mediaElement.originalNode.width,
 		    videoId = YouTubeApi.getYouTubeId(mediaFiles[0].src),
 		    youtubeSettings = {
 			id: youtube.id,
@@ -7428,9 +7257,6 @@ var YouTubeIframeRenderer = {
 				showinfo: 0,
 				modestbranding: 0,
 				html5: 1,
-				playsinline: 0,
-				start: 0,
-				end: 0,
 				iv_load_policy: 3
 			}, youtube.options.youtube),
 			origin: _window2.default.location.host,
@@ -7442,7 +7268,6 @@ var YouTubeIframeRenderer = {
 						ended: false
 					};
 
-					// do call stack
 					if (apiStack.length) {
 						for (var _i2 = 0, _total2 = apiStack.length; _i2 < _total2; _i2++) {
 
@@ -7459,12 +7284,14 @@ var YouTubeIframeRenderer = {
 						}
 					}
 
-					// a few more events
 					youTubeIframe = youTubeApi.getIframe();
+
+					if (mediaElement.originalNode.muted) {
+						youTubeApi.mute();
+					}
 
 					var events = ['mouseover', 'mouseout'],
 					    assignEvents = function assignEvents(e) {
-
 						var newEvent = (0, _general.createEvent)(e.type, youtube);
 						mediaElement.dispatchEvent(newEvent);
 					};
@@ -7473,8 +7300,7 @@ var YouTubeIframeRenderer = {
 						youTubeIframe.addEventListener(events[_i3], assignEvents, false);
 					}
 
-					// send init events
-					var initEvents = ['rendererready', 'loadeddata', 'loadedmetadata', 'canplay'];
+					var initEvents = ['rendererready', 'loadedmetadata', 'loadeddata', 'canplay'];
 
 					for (var _i4 = 0, _total4 = initEvents.length; _i4 < _total4; _i4++) {
 						var event = (0, _general.createEvent)(initEvents[_i4], youtube);
@@ -7482,81 +7308,74 @@ var YouTubeIframeRenderer = {
 					}
 				},
 				onStateChange: function onStateChange(e) {
-
-					// translate events
 					var events = [];
 
 					switch (e.data) {
 						case -1:
-							// not started
 							events = ['loadedmetadata'];
 							paused = true;
 							ended = false;
 							break;
-
 						case 0:
-							// YT.PlayerState.ENDED
 							events = ['ended'];
 							paused = false;
-							ended = true;
-
-							youtube.stopInterval();
+							ended = !youtube.options.youtube.loop;
+							if (!youtube.options.youtube.loop) {
+								youtube.stopInterval();
+							}
 							break;
-
 						case 1:
-							// YT.PlayerState.PLAYING
 							events = ['play', 'playing'];
 							paused = false;
 							ended = false;
-
 							youtube.startInterval();
-
 							break;
-
 						case 2:
-							// YT.PlayerState.PAUSED
 							events = ['pause'];
 							paused = true;
 							ended = false;
-
 							youtube.stopInterval();
 							break;
-
 						case 3:
-							// YT.PlayerState.BUFFERING
 							events = ['progress'];
 							ended = false;
-
 							break;
 						case 5:
-							// YT.PlayerState.CUED
 							events = ['loadeddata', 'loadedmetadata', 'canplay'];
 							paused = true;
 							ended = false;
-
 							break;
 					}
 
-					// send events up
 					for (var _i5 = 0, _total5 = events.length; _i5 < _total5; _i5++) {
 						var event = (0, _general.createEvent)(events[_i5], youtube);
 						mediaElement.dispatchEvent(event);
 					}
 				},
 				onError: function onError(e) {
-					var event = (0, _general.createEvent)('error', youtube);
-					event.data = e.data;
-					mediaElement.dispatchEvent(event);
+					return errorHandler(e);
 				}
 			}
 		};
 
-		// The following will prevent that in mobile devices, YouTube is displayed in fullscreen when using audio
-		if (isAudio) {
+		if (isAudio || mediaElement.originalNode.hasAttribute('playsinline')) {
 			youtubeSettings.playerVars.playsinline = 1;
 		}
 
-		// send it off for async loading and creation
+		if (mediaElement.originalNode.controls) {
+			youtubeSettings.playerVars.controls = 1;
+		}
+		if (mediaElement.originalNode.autoplay) {
+			youtubeSettings.playerVars.autoplay = 1;
+		}
+		if (mediaElement.originalNode.loop) {
+			youtubeSettings.playerVars.loop = 1;
+		}
+
+		if ((youtubeSettings.playerVars.loop && parseInt(youtubeSettings.playerVars.loop, 10) === 1 || mediaElement.originalNode.src.indexOf('loop=') > -1) && !youtubeSettings.playerVars.playlist && mediaElement.originalNode.src.indexOf('playlist=') === -1) {
+			youtubeSettings.playerVars.playlist = YouTubeApi.getYouTubeId(mediaElement.originalNode.src);
+		}
+
 		YouTubeApi.enqueueIframe(youtubeSettings);
 
 		youtube.onEvent = function (eventName, player, _youTubeState) {
@@ -7588,9 +7407,7 @@ var YouTubeIframeRenderer = {
 		youtube.interval = null;
 
 		youtube.startInterval = function () {
-			// create timer
 			youtube.interval = setInterval(function () {
-
 				var event = (0, _general.createEvent)('timeupdate', youtube);
 				mediaElement.dispatchEvent(event);
 			}, 250);
@@ -7600,32 +7417,35 @@ var YouTubeIframeRenderer = {
 				clearInterval(youtube.interval);
 			}
 		};
+		youtube.getPosterUrl = function () {
+			var quality = options.youtube.imageQuality,
+			    resolutions = ['default', 'hqdefault', 'mqdefault', 'sddefault', 'maxresdefault'],
+			    id = YouTubeApi.getYouTubeId(mediaElement.originalNode.src);
+			return quality && resolutions.indexOf(quality) > -1 && id ? 'https://img.youtube.com/vi/' + id + '/' + quality + '.jpg' : '';
+		};
 
 		return youtube;
 	}
 };
 
-if (_window2.default.postMessage && _typeof(_window2.default.addEventListener)) {
+_window2.default.onYouTubePlayerAPIReady = function () {
+	YouTubeApi.iFrameReady();
+};
 
-	_window2.default.onYouTubePlayerAPIReady = function () {
-		YouTubeApi.iFrameReady();
-	};
+_media.typeChecks.push(function (url) {
+	return (/\/\/(www\.youtube|youtu\.?be)/i.test(url) ? 'video/x-youtube' : null
+	);
+});
 
-	_media.typeChecks.push(function (url) {
-		url = url.toLowerCase();
-		return url.includes('//www.youtube') || url.includes('//youtu.be') ? 'video/x-youtube' : null;
-	});
+_renderer.renderer.add(YouTubeIframeRenderer);
 
-	_renderer.renderer.add(YouTubeIframeRenderer);
-}
-
-},{"2":2,"24":24,"25":25,"3":3,"6":6,"7":7}],23:[function(_dereq_,module,exports){
+},{"2":2,"26":26,"27":27,"28":28,"3":3,"7":7,"8":8}],25:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
 	value: true
 });
-exports.cancelFullScreen = exports.requestFullScreen = exports.isFullScreen = exports.FULLSCREEN_EVENT_NAME = exports.HAS_NATIVE_FULLSCREEN_ENABLED = exports.HAS_TRUE_NATIVE_FULLSCREEN = exports.HAS_IOS_FULLSCREEN = exports.HAS_MS_NATIVE_FULLSCREEN = exports.HAS_MOZ_NATIVE_FULLSCREEN = exports.HAS_WEBKIT_NATIVE_FULLSCREEN = exports.HAS_NATIVE_FULLSCREEN = exports.SUPPORTS_NATIVE_HLS = exports.SUPPORT_POINTER_EVENTS = exports.HAS_MSE = exports.IS_STOCK_ANDROID = exports.IS_SAFARI = exports.IS_FIREFOX = exports.IS_CHROME = exports.IS_EDGE = exports.IS_IE = exports.IS_ANDROID = exports.IS_IOS = exports.IS_IPHONE = exports.IS_IPAD = exports.UA = exports.NAV = undefined;
+exports.cancelFullScreen = exports.requestFullScreen = exports.isFullScreen = exports.FULLSCREEN_EVENT_NAME = exports.HAS_NATIVE_FULLSCREEN_ENABLED = exports.HAS_TRUE_NATIVE_FULLSCREEN = exports.HAS_IOS_FULLSCREEN = exports.HAS_MS_NATIVE_FULLSCREEN = exports.HAS_MOZ_NATIVE_FULLSCREEN = exports.HAS_WEBKIT_NATIVE_FULLSCREEN = exports.HAS_NATIVE_FULLSCREEN = exports.SUPPORTS_NATIVE_HLS = exports.SUPPORT_PASSIVE_EVENT = exports.SUPPORT_POINTER_EVENTS = exports.HAS_MSE = exports.IS_STOCK_ANDROID = exports.IS_SAFARI = exports.IS_FIREFOX = exports.IS_CHROME = exports.IS_EDGE = exports.IS_IE = exports.IS_ANDROID = exports.IS_IOS = exports.IS_IPOD = exports.IS_IPHONE = exports.IS_IPAD = exports.UA = exports.NAV = undefined;
 
 var _window = _dereq_(3);
 
@@ -7635,7 +7455,7 @@ var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
@@ -7643,18 +7463,17 @@ function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { de
 
 var NAV = exports.NAV = _window2.default.navigator;
 var UA = exports.UA = NAV.userAgent.toLowerCase();
-
-var IS_IPAD = exports.IS_IPAD = UA.match(/ipad/i) !== null;
-var IS_IPHONE = exports.IS_IPHONE = UA.match(/iphone/i) !== null;
-var IS_IOS = exports.IS_IOS = IS_IPHONE || IS_IPAD;
-var IS_ANDROID = exports.IS_ANDROID = UA.match(/android/i) !== null;
-var IS_IE = exports.IS_IE = NAV.appName.toLowerCase().includes('microsoft') || NAV.appName.toLowerCase().match(/trident/gi) !== null;
+var IS_IPAD = exports.IS_IPAD = /ipad/i.test(UA) && !_window2.default.MSStream;
+var IS_IPHONE = exports.IS_IPHONE = /iphone/i.test(UA) && !_window2.default.MSStream;
+var IS_IPOD = exports.IS_IPOD = /ipod/i.test(UA) && !_window2.default.MSStream;
+var IS_IOS = exports.IS_IOS = /ipad|iphone|ipod/i.test(UA) && !_window2.default.MSStream;
+var IS_ANDROID = exports.IS_ANDROID = /android/i.test(UA);
+var IS_IE = exports.IS_IE = /(trident|microsoft)/i.test(NAV.appName);
 var IS_EDGE = exports.IS_EDGE = 'msLaunchUri' in NAV && !('documentMode' in _document2.default);
-var IS_CHROME = exports.IS_CHROME = UA.match(/chrome/gi) !== null;
-var IS_FIREFOX = exports.IS_FIREFOX = UA.match(/firefox/gi) !== null;
-var IS_SAFARI = exports.IS_SAFARI = UA.match(/safari/gi) !== null && !IS_CHROME;
-var IS_STOCK_ANDROID = exports.IS_STOCK_ANDROID = UA.match(/^mozilla\/\d+\.\d+\s\(linux;\su;/gi) !== null;
-
+var IS_CHROME = exports.IS_CHROME = /chrome/i.test(UA);
+var IS_FIREFOX = exports.IS_FIREFOX = /firefox/i.test(UA);
+var IS_SAFARI = exports.IS_SAFARI = /safari/i.test(UA) && !IS_CHROME;
+var IS_STOCK_ANDROID = exports.IS_STOCK_ANDROID = /^mozilla\/\d+\.\d+\s\(linux;\su;/i.test(UA);
 var HAS_MSE = exports.HAS_MSE = 'MediaSource' in _window2.default;
 var SUPPORT_POINTER_EVENTS = exports.SUPPORT_POINTER_EVENTS = function () {
 	var element = _document2.default.createElement('x'),
@@ -7668,12 +7487,25 @@ var SUPPORT_POINTER_EVENTS = exports.SUPPORT_POINTER_EVENTS = function () {
 	element.style.pointerEvents = 'auto';
 	element.style.pointerEvents = 'x';
 	documentElement.appendChild(element);
-	var supports = getComputedStyle && getComputedStyle(element, '').pointerEvents === 'auto';
-	documentElement.removeChild(element);
+	var supports = getComputedStyle && (getComputedStyle(element, '') || {}).pointerEvents === 'auto';
+	element.remove();
 	return !!supports;
 }();
 
-// for IE
+var SUPPORT_PASSIVE_EVENT = exports.SUPPORT_PASSIVE_EVENT = function () {
+	var supportsPassive = false;
+	try {
+		var opts = Object.defineProperty({}, 'passive', {
+			get: function get() {
+				supportsPassive = true;
+			}
+		});
+		_window2.default.addEventListener('test', null, opts);
+	} catch (e) {}
+
+	return supportsPassive;
+}();
+
 var html5Elements = ['source', 'track', 'audio', 'video'];
 var video = void 0;
 
@@ -7681,28 +7513,20 @@ for (var i = 0, total = html5Elements.length; i < total; i++) {
 	video = _document2.default.createElement(html5Elements[i]);
 }
 
-// Test if browsers support HLS natively (right now Safari, Android's Chrome and Stock browsers, and MS Edge)
-var SUPPORTS_NATIVE_HLS = exports.SUPPORTS_NATIVE_HLS = IS_SAFARI || IS_ANDROID && (IS_CHROME || IS_STOCK_ANDROID) || IS_IE && UA.match(/edge/gi) !== null;
+var SUPPORTS_NATIVE_HLS = exports.SUPPORTS_NATIVE_HLS = IS_SAFARI || IS_ANDROID && (IS_CHROME || IS_STOCK_ANDROID) || IS_IE && /edge/i.test(UA);
 
-// Detect native JavaScript fullscreen (Safari/Firefox only, Chrome still fails)
-
-// iOS
 var hasiOSFullScreen = video.webkitEnterFullscreen !== undefined;
 
-// W3C
 var hasNativeFullscreen = video.requestFullscreen !== undefined;
 
-// OS X 10.5 can't do this even if it says it can :(
-if (hasiOSFullScreen && UA.match(/mac os x 10_5/i)) {
+if (hasiOSFullScreen && /mac os x 10_5/i.test(UA)) {
 	hasNativeFullscreen = false;
 	hasiOSFullScreen = false;
 }
 
-// webkit/firefox/IE11+
 var hasWebkitNativeFullScreen = video.webkitRequestFullScreen !== undefined;
 var hasMozNativeFullScreen = video.mozRequestFullScreen !== undefined;
 var hasMsNativeFullScreen = video.msRequestFullscreen !== undefined;
-
 var hasTrueNativeFullScreen = hasWebkitNativeFullScreen || hasMozNativeFullScreen || hasMsNativeFullScreen;
 var nativeFullScreenEnabled = hasTrueNativeFullScreen;
 var fullScreenEventName = '';
@@ -7710,7 +7534,6 @@ var isFullScreen = void 0,
     requestFullScreen = void 0,
     cancelFullScreen = void 0;
 
-// Enabled?
 if (hasMozNativeFullScreen) {
 	nativeFullScreenEnabled = _document2.default.mozFullScreenEnabled;
 } else if (hasMsNativeFullScreen) {
@@ -7722,7 +7545,6 @@ if (IS_CHROME) {
 }
 
 if (hasTrueNativeFullScreen) {
-
 	if (hasWebkitNativeFullScreen) {
 		fullScreenEventName = 'webkitfullscreenchange';
 	} else if (hasMozNativeFullScreen) {
@@ -7742,7 +7564,6 @@ if (hasTrueNativeFullScreen) {
 	};
 
 	exports.requestFullScreen = requestFullScreen = function requestFullScreen(el) {
-
 		if (hasWebkitNativeFullScreen) {
 			el.webkitRequestFullScreen();
 		} else if (hasMozNativeFullScreen) {
@@ -7771,7 +7592,6 @@ var HAS_IOS_FULLSCREEN = exports.HAS_IOS_FULLSCREEN = hasiOSFullScreen;
 var HAS_TRUE_NATIVE_FULLSCREEN = exports.HAS_TRUE_NATIVE_FULLSCREEN = hasTrueNativeFullScreen;
 var HAS_NATIVE_FULLSCREEN_ENABLED = exports.HAS_NATIVE_FULLSCREEN_ENABLED = nativeFullScreenEnabled;
 var FULLSCREEN_EVENT_NAME = exports.FULLSCREEN_EVENT_NAME = fullScreenEventName;
-
 exports.isFullScreen = isFullScreen;
 exports.requestFullScreen = requestFullScreen;
 exports.cancelFullScreen = cancelFullScreen;
@@ -7779,6 +7599,7 @@ exports.cancelFullScreen = cancelFullScreen;
 
 _mejs2.default.Features = _mejs2.default.Features || {};
 _mejs2.default.Features.isiPad = IS_IPAD;
+_mejs2.default.Features.isiPod = IS_IPOD;
 _mejs2.default.Features.isiPhone = IS_IPHONE;
 _mejs2.default.Features.isiOS = _mejs2.default.Features.isiPhone || _mejs2.default.Features.isiPad;
 _mejs2.default.Features.isAndroid = IS_ANDROID;
@@ -7790,8 +7611,8 @@ _mejs2.default.Features.isSafari = IS_SAFARI;
 _mejs2.default.Features.isStockAndroid = IS_STOCK_ANDROID;
 _mejs2.default.Features.hasMSE = HAS_MSE;
 _mejs2.default.Features.supportsNativeHLS = SUPPORTS_NATIVE_HLS;
-
 _mejs2.default.Features.supportsPointerEvents = SUPPORT_POINTER_EVENTS;
+_mejs2.default.Features.supportsPassiveEvent = SUPPORT_PASSIVE_EVENT;
 _mejs2.default.Features.hasiOSFullScreen = HAS_IOS_FULLSCREEN;
 _mejs2.default.Features.hasNativeFullscreen = HAS_NATIVE_FULLSCREEN;
 _mejs2.default.Features.hasWebkitNativeFullScreen = HAS_WEBKIT_NATIVE_FULLSCREEN;
@@ -7804,7 +7625,236 @@ _mejs2.default.Features.isFullScreen = isFullScreen;
 _mejs2.default.Features.requestFullScreen = requestFullScreen;
 _mejs2.default.Features.cancelFullScreen = cancelFullScreen;
 
-},{"2":2,"3":3,"6":6}],24:[function(_dereq_,module,exports){
+},{"2":2,"3":3,"7":7}],26:[function(_dereq_,module,exports){
+'use strict';
+
+Object.defineProperty(exports, "__esModule", {
+	value: true
+});
+exports.removeClass = exports.addClass = exports.hasClass = undefined;
+exports.loadScript = loadScript;
+exports.offset = offset;
+exports.toggleClass = toggleClass;
+exports.fadeOut = fadeOut;
+exports.fadeIn = fadeIn;
+exports.siblings = siblings;
+exports.visible = visible;
+exports.ajax = ajax;
+
+var _window = _dereq_(3);
+
+var _window2 = _interopRequireDefault(_window);
+
+var _document = _dereq_(2);
+
+var _document2 = _interopRequireDefault(_document);
+
+var _mejs = _dereq_(7);
+
+var _mejs2 = _interopRequireDefault(_mejs);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function loadScript(url) {
+	return new Promise(function (resolve, reject) {
+		var script = _document2.default.createElement('script');
+		script.src = url;
+		script.async = true;
+		script.onload = function () {
+			script.remove();
+			resolve();
+		};
+		script.onerror = function () {
+			script.remove();
+			reject();
+		};
+		_document2.default.head.appendChild(script);
+	});
+}
+
+function offset(el) {
+	var rect = el.getBoundingClientRect(),
+	    scrollLeft = _window2.default.pageXOffset || _document2.default.documentElement.scrollLeft,
+	    scrollTop = _window2.default.pageYOffset || _document2.default.documentElement.scrollTop;
+	return { top: rect.top + scrollTop, left: rect.left + scrollLeft };
+}
+
+var hasClassMethod = void 0,
+    addClassMethod = void 0,
+    removeClassMethod = void 0;
+
+if ('classList' in _document2.default.documentElement) {
+	hasClassMethod = function hasClassMethod(el, className) {
+		return el.classList !== undefined && el.classList.contains(className);
+	};
+	addClassMethod = function addClassMethod(el, className) {
+		return el.classList.add(className);
+	};
+	removeClassMethod = function removeClassMethod(el, className) {
+		return el.classList.remove(className);
+	};
+} else {
+	hasClassMethod = function hasClassMethod(el, className) {
+		return new RegExp('\\b' + className + '\\b').test(el.className);
+	};
+	addClassMethod = function addClassMethod(el, className) {
+		if (!hasClass(el, className)) {
+			el.className += ' ' + className;
+		}
+	};
+	removeClassMethod = function removeClassMethod(el, className) {
+		el.className = el.className.replace(new RegExp('\\b' + className + '\\b', 'g'), '');
+	};
+}
+
+var hasClass = exports.hasClass = hasClassMethod;
+var addClass = exports.addClass = addClassMethod;
+var removeClass = exports.removeClass = removeClassMethod;
+
+function toggleClass(el, className) {
+	hasClass(el, className) ? removeClass(el, className) : addClass(el, className);
+}
+
+function fadeOut(el) {
+	var duration = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 400;
+	var callback = arguments[2];
+
+	if (!el.style.opacity) {
+		el.style.opacity = 1;
+	}
+
+	var start = null;
+	_window2.default.requestAnimationFrame(function animate(timestamp) {
+		start = start || timestamp;
+		var progress = timestamp - start;
+		var opacity = parseFloat(1 - progress / duration, 2);
+		el.style.opacity = opacity < 0 ? 0 : opacity;
+		if (progress > duration) {
+			if (callback && typeof callback === 'function') {
+				callback();
+			}
+		} else {
+			_window2.default.requestAnimationFrame(animate);
+		}
+	});
+}
+
+function fadeIn(el) {
+	var duration = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 400;
+	var callback = arguments[2];
+
+	if (!el.style.opacity) {
+		el.style.opacity = 0;
+	}
+
+	var start = null;
+	_window2.default.requestAnimationFrame(function animate(timestamp) {
+		start = start || timestamp;
+		var progress = timestamp - start;
+		var opacity = parseFloat(progress / duration, 2);
+		el.style.opacity = opacity > 1 ? 1 : opacity;
+		if (progress > duration) {
+			if (callback && typeof callback === 'function') {
+				callback();
+			}
+		} else {
+			_window2.default.requestAnimationFrame(animate);
+		}
+	});
+}
+
+function siblings(el, filter) {
+	var siblings = [];
+	el = el.parentNode.firstChild;
+	do {
+		if (!filter || filter(el)) {
+			siblings.push(el);
+		}
+	} while (el = el.nextSibling);
+	return siblings;
+}
+
+function visible(elem) {
+	if (elem.getClientRects !== undefined && elem.getClientRects === 'function') {
+		return !!(elem.offsetWidth || elem.offsetHeight || elem.getClientRects().length);
+	}
+	return !!(elem.offsetWidth || elem.offsetHeight);
+}
+
+function ajax(url, dataType, success, error) {
+	var xhr = _window2.default.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject('Microsoft.XMLHTTP');
+
+	var type = 'application/x-www-form-urlencoded; charset=UTF-8',
+	    completed = false,
+	    accept = '*/'.concat('*');
+
+	switch (dataType) {
+		case 'text':
+			type = 'text/plain';
+			break;
+		case 'json':
+			type = 'application/json, text/javascript';
+			break;
+		case 'html':
+			type = 'text/html';
+			break;
+		case 'xml':
+			type = 'application/xml, text/xml';
+			break;
+	}
+
+	if (type !== 'application/x-www-form-urlencoded') {
+		accept = type + ', */*; q=0.01';
+	}
+
+	if (xhr) {
+		xhr.open('GET', url, true);
+		xhr.setRequestHeader('Accept', accept);
+		xhr.onreadystatechange = function () {
+			if (completed) {
+				return;
+			}
+
+			if (xhr.readyState === 4) {
+				if (xhr.status === 200) {
+					completed = true;
+					var data = void 0;
+					switch (dataType) {
+						case 'json':
+							data = JSON.parse(xhr.responseText);
+							break;
+						case 'xml':
+							data = xhr.responseXML;
+							break;
+						default:
+							data = xhr.responseText;
+							break;
+					}
+					success(data);
+				} else if (typeof error === 'function') {
+					error(xhr.status);
+				}
+			}
+		};
+
+		xhr.send();
+	}
+}
+
+_mejs2.default.Utils = _mejs2.default.Utils || {};
+_mejs2.default.Utils.offset = offset;
+_mejs2.default.Utils.hasClass = hasClass;
+_mejs2.default.Utils.addClass = addClass;
+_mejs2.default.Utils.removeClass = removeClass;
+_mejs2.default.Utils.toggleClass = toggleClass;
+_mejs2.default.Utils.fadeIn = fadeIn;
+_mejs2.default.Utils.fadeOut = fadeOut;
+_mejs2.default.Utils.siblings = siblings;
+_mejs2.default.Utils.visible = visible;
+_mejs2.default.Utils.ajax = ajax;
+_mejs2.default.Utils.loadScript = loadScript;
+
+},{"2":2,"3":3,"7":7}],27:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -7818,17 +7868,12 @@ exports.createEvent = createEvent;
 exports.isNodeAfter = isNodeAfter;
 exports.isString = isString;
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- *
- * @param {String} input
- * @return {string}
- */
 function escapeHTML(input) {
 
 	if (typeof input !== 'string') {
@@ -7847,7 +7892,6 @@ function escapeHTML(input) {
 	});
 }
 
-// taken from underscore
 function debounce(func, wait) {
 	var _this = this,
 	    _arguments = arguments;
@@ -7883,31 +7927,16 @@ function debounce(func, wait) {
 	};
 }
 
-/**
- * Determine if an object contains any elements
- *
- * @see http://stackoverflow.com/questions/679915/how-do-i-test-for-an-empty-javascript-object
- * @param {Object} instance
- * @return {Boolean}
- */
 function isObjectEmpty(instance) {
 	return Object.getOwnPropertyNames(instance).length <= 0;
 }
 
-/**
- * Group a string of events into `document` (d) and `window` (w) events
- *
- * @param {String} events  List of space separated events
- * @param {String} id      Namespace appended to events
- * @return {{d: Array, w: Array}}
- */
 function splitEvents(events, id) {
-	// Global events
 	var rwindow = /^((after|before)print|(before)?unload|hashchange|message|o(ff|n)line|page(hide|show)|popstate|resize|storage)\b/;
-	// add player ID as an event namespace so it's easier to unbind them all later
+
 	var ret = { d: [], w: [] };
 	(events || '').split(' ').forEach(function (v) {
-		var eventName = v + '.' + id;
+		var eventName = '' + v + (id ? '.' + id : '');
 
 		if (eventName.startsWith('.')) {
 			ret.d.push(eventName);
@@ -7922,49 +7951,32 @@ function splitEvents(events, id) {
 	return ret;
 }
 
-/**
- *
- * @param {string} eventName
- * @param {*} target
- * @return {Event|Object}
- */
 function createEvent(eventName, target) {
 
 	if (typeof eventName !== 'string') {
 		throw new Error('Event name must be a string');
 	}
 
-	var event = void 0;
+	var eventFrags = eventName.match(/([a-z]+\.([a-z]+))/i),
+	    detail = {
+		target: target
+	};
 
-	if (document.createEvent) {
-		event = document.createEvent('Event');
-		event.initEvent(eventName, true, false);
-	} else {
-		event = {};
-		event.type = eventName;
-		event.target = target;
-		event.canceleable = true;
-		event.bubbable = false;
+	if (eventFrags !== null) {
+		eventName = eventFrags[1];
+		detail.namespace = eventFrags[2];
 	}
 
-	return event;
+	return new window.CustomEvent(eventName, {
+		detail: detail
+	});
 }
 
-/**
- * Returns true if targetNode appears after sourceNode in the dom.
- * @param {HTMLElement} sourceNode - the source node for comparison
- * @param {HTMLElement} targetNode - the node to compare against sourceNode
- */
 function isNodeAfter(sourceNode, targetNode) {
-	return !!(sourceNode && targetNode && sourceNode.compareDocumentPosition(targetNode) && Node.DOCUMENT_POSITION_PRECEDING);
+
+	return !!(sourceNode && targetNode && sourceNode.compareDocumentPosition(targetNode) & 2);
 }
 
-/**
- * Determines if a value is a string
- *
- * @param {*} value to check
- * @returns {Boolean} True if a value is a string
- */
 function isString(value) {
 	return typeof value === 'string';
 }
@@ -7978,7 +7990,7 @@ _mejs2.default.Utils.createEvent = createEvent;
 _mejs2.default.Utils.isNodeAfter = isNodeAfter;
 _mejs2.default.Utils.isString = isString;
 
-},{"6":6}],25:[function(_dereq_,module,exports){
+},{"7":7}],28:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -7992,21 +8004,16 @@ exports.getTypeFromFile = getTypeFromFile;
 exports.getExtension = getExtension;
 exports.normalizeExtension = normalizeExtension;
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
-var _general = _dereq_(24);
+var _general = _dereq_(27);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 var typeChecks = exports.typeChecks = [];
 
-/**
- *
- * @param {String} url
- * @return {String}
- */
 function absolutizeUrl(url) {
 
 	if (typeof url !== 'string') {
@@ -8018,86 +8025,44 @@ function absolutizeUrl(url) {
 	return el.firstChild.href;
 }
 
-/**
- * Get the format of a specific media, based on URL and additionally its mime type
- *
- * @param {String} url
- * @param {String} type
- * @return {String}
- */
 function formatType(url) {
 	var type = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : '';
 
-	return url && !type ? getTypeFromFile(url) : getMimeFromType(type);
+	return url && !type ? getTypeFromFile(url) : type;
 }
 
-/**
- * Return the mime part of the type in case the attribute contains the codec
- * (`video/mp4; codecs="avc1.42E01E, mp4a.40.2"` becomes `video/mp4`)
- *
- * @see http://www.whatwg.org/specs/web-apps/current-work/multipage/video.html#the-source-element
- * @param {String} type
- * @return {String}
- */
 function getMimeFromType(type) {
 
 	if (typeof type !== 'string') {
 		throw new Error('`type` argument must be a string');
 	}
 
-	return type && ~type.indexOf(';') ? type.substr(0, type.indexOf(';')) : type;
+	return type && type.indexOf(';') > -1 ? type.substr(0, type.indexOf(';')) : type;
 }
 
-/**
- * Get the type of media based on URL structure
- *
- * @param {String} url
- * @return {String}
- */
 function getTypeFromFile(url) {
 
 	if (typeof url !== 'string') {
 		throw new Error('`url` argument must be a string');
 	}
 
-	var type = void 0;
+	for (var i = 0, total = typeChecks.length; i < total; i++) {
+		var type = typeChecks[i](url);
 
-	// Validate `typeChecks` array
-	if (!Array.isArray(typeChecks)) {
-		throw new Error('`typeChecks` must be an array');
-	}
-
-	if (typeChecks.length) {
-		for (var i = 0, total = typeChecks.length; i < total; i++) {
-			var _type = typeChecks[i];
-
-			if (typeof _type !== 'function') {
-				throw new Error('Element in array must be a function');
-			}
-		}
-	}
-
-	// do type checks first
-	for (var _i = 0, _total = typeChecks.length; _i < _total; _i++) {
-
-		type = typeChecks[_i](url);
-
-		if (type !== undefined && type !== null) {
+		if (type) {
 			return type;
 		}
 	}
 
-	// the do standard extension check
 	var ext = getExtension(url),
 	    normalizedExt = normalizeExtension(ext);
 
 	var mime = 'video/mp4';
 
-	// Obtain correct MIME types
 	if (normalizedExt) {
-		if (['mp4', 'm4v', 'ogg', 'ogv', 'webm', 'flv', 'mpeg', 'mov'].includes(normalizedExt)) {
+		if (~['mp4', 'm4v', 'ogg', 'ogv', 'webm', 'flv', 'mpeg', 'mov'].indexOf(normalizedExt)) {
 			mime = 'video/' + normalizedExt;
-		} else if (['mp3', 'oga', 'wav', 'mid', 'midi'].includes(normalizedExt)) {
+		} else if (~['mp3', 'oga', 'wav', 'mid', 'midi'].indexOf(normalizedExt)) {
 			mime = 'audio/' + normalizedExt;
 		}
 	}
@@ -8105,12 +8070,6 @@ function getTypeFromFile(url) {
 	return mime;
 }
 
-/**
- * Get media file extension from URL
- *
- * @param {String} url
- * @return {String}
- */
 function getExtension(url) {
 
 	if (typeof url !== 'string') {
@@ -8119,16 +8078,9 @@ function getExtension(url) {
 
 	var baseUrl = url.split('?')[0],
 	    baseName = baseUrl.split('\\').pop().split('/').pop();
-
-	return baseName.indexOf('.') > -1 ? baseName.substring(baseName.lastIndexOf('.') + 1) : '';
+	return ~baseName.indexOf('.') ? baseName.substring(baseName.lastIndexOf('.') + 1) : '';
 }
 
-/**
- * Get standard extension of a media file
- *
- * @param {String} extension
- * @return {String}
- */
 function normalizeExtension(extension) {
 
 	if (typeof extension !== 'string') {
@@ -8161,123 +8113,56 @@ _mejs2.default.Utils.getTypeFromFile = getTypeFromFile;
 _mejs2.default.Utils.getExtension = getExtension;
 _mejs2.default.Utils.normalizeExtension = normalizeExtension;
 
-},{"24":24,"6":6}],26:[function(_dereq_,module,exports){
+},{"27":27,"7":7}],29:[function(_dereq_,module,exports){
 'use strict';
 
 var _document = _dereq_(2);
 
 var _document2 = _interopRequireDefault(_document);
 
+var _promisePolyfill = _dereq_(4);
+
+var _promisePolyfill2 = _interopRequireDefault(_promisePolyfill);
+
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Polyfill
- *
- * Mimics the missing methods like Object.assign, Array.includes, etc., as a way to avoid including the whole list
- * of polyfills provided by Babel.
- */
-
-// IE6,7,8
-// Production steps of ECMA-262, Edition 5, 15.4.4.14
-// Reference: http://es5.github.io/#x15.4.4.14
-if (!Array.prototype.indexOf) {
-	Array.prototype.indexOf = function (searchElement, fromIndex) {
-
-		var k = void 0;
-
-		// 1. const O be the result of calling ToObject passing
-		//	   the this value as the argument.
-		if (undefined === undefined || undefined === null) {
-			throw new TypeError('"this" is null or not defined');
+(function (arr) {
+	arr.forEach(function (item) {
+		if (item.hasOwnProperty('remove')) {
+			return;
 		}
-
-		var O = Object(undefined);
-
-		// 2. const lenValue be the result of calling the Get
-		//	   internal method of O with the argument "length".
-		// 3. const len be ToUint32(lenValue).
-		var len = O.length >>> 0;
-
-		// 4. If len is 0, return -1.
-		if (len === 0) {
-			return -1;
-		}
-
-		// 5. If argument fromIndex was passed const n be
-		//	   ToInteger(fromIndex); else const n be 0.
-		var n = +fromIndex || 0;
-
-		if (Math.abs(n) === Infinity) {
-			n = 0;
-		}
-
-		// 6. If n >= len, return -1.
-		if (n >= len) {
-			return -1;
-		}
-
-		// 7. If n >= 0, then const k be n.
-		// 8. Else, n<0, const k be len - abs(n).
-		//	   If k is less than 0, then const k be 0.
-		k = Math.max(n >= 0 ? n : len - Math.abs(n), 0);
-
-		// 9. Repeat, while k < len
-		while (k < len) {
-			// a. const Pk be ToString(k).
-			//   This is implicit for LHS operands of the in operator
-			// b. const kPresent be the result of calling the
-			//	HasProperty internal method of O with argument Pk.
-			//   This step can be combined with c
-			// c. If kPresent is true, then
-			//	i.	const elementK be the result of calling the Get
-			//		internal method of O with the argument ToString(k).
-			//   ii.	const same be the result of applying the
-			//		Strict Equality Comparison Algorithm to
-			//		searchElement and elementK.
-			//  iii.	If same is true, return k.
-			if (k in O && O[k] === searchElement) {
-				return k;
+		Object.defineProperty(item, 'remove', {
+			configurable: true,
+			enumerable: true,
+			writable: true,
+			value: function remove() {
+				this.parentNode.removeChild(this);
 			}
-			k++;
-		}
-		return -1;
-	};
-}
+		});
+	});
+})([Element.prototype, CharacterData.prototype, DocumentType.prototype]);
 
-// document.createEvent for IE8 or other old browsers that do not implement it
-// Reference: https://github.com/WebReflection/ie8/blob/master/build/ie8.max.js
-if (_document2.default.createEvent === undefined) {
-	_document2.default.createEvent = function () {
+(function () {
 
-		var e = _document2.default.createEventObject();
-		e.timeStamp = new Date().getTime();
-		e.enumerable = true;
-		e.writable = true;
-		e.configurable = true;
-		e.initEvent = function (type, bubbles, cancelable) {
-			undefined.type = type;
-			undefined.bubbles = !!bubbles;
-			undefined.cancelable = !!cancelable;
-			if (!undefined.bubbles) {
-				undefined.stopPropagation = function () {
-					undefined.stoppedPropagation = true;
-					undefined.cancelBubble = true;
-				};
-			}
-		};
+	if (typeof window.CustomEvent === 'function') {
+		return false;
+	}
 
-		return e;
-	};
-}
+	function CustomEvent(event, params) {
+		params = params || { bubbles: false, cancelable: false, detail: undefined };
+		var evt = _document2.default.createEvent('CustomEvent');
+		evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+		return evt;
+	}
 
-// Object.assign polyfill
-// Reference: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign#Polyfill
+	CustomEvent.prototype = window.Event.prototype;
+	window.CustomEvent = CustomEvent;
+})();
+
 if (typeof Object.assign !== 'function') {
 	Object.assign = function (target) {
-		// .length of function is 2
 
 		if (target === null || target === undefined) {
-			// TypeError if undefined or null
 			throw new TypeError('Cannot convert undefined or null to object');
 		}
 
@@ -8287,9 +8172,7 @@ if (typeof Object.assign !== 'function') {
 			var nextSource = arguments[index];
 
 			if (nextSource !== null) {
-				// Skip over if undefined or null
 				for (var nextKey in nextSource) {
-					// Avoid bugs when hasOwnProperty is shadowed
 					if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
 						to[nextKey] = nextSource[nextKey];
 					}
@@ -8300,64 +8183,6 @@ if (typeof Object.assign !== 'function') {
 	};
 }
 
-// Array.includes polyfill
-// Reference: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/includes#Polyfill
-if (!Array.prototype.includes) {
-	Object.defineProperty(Array.prototype, 'includes', {
-		value: function value(searchElement, fromIndex) {
-
-			// 1. const O be ? ToObject(this value).
-			if (this === null || this === undefined) {
-				throw new TypeError('"this" is null or not defined');
-			}
-
-			var o = Object(this);
-
-			// 2. const len be ? ToLength(? Get(O, "length")).
-			var len = o.length >>> 0;
-
-			// 3. If len is 0, return false.
-			if (len === 0) {
-				return false;
-			}
-
-			// 4. const n be ? ToInteger(fromIndex).
-			//    (If fromIndex is undefined, this step produces the value 0.)
-			var n = fromIndex | 0;
-
-			// 5. If n ≥ 0, then
-			//  a. const k be n.
-			// 6. Else n < 0,
-			//  a. const k be len + n.
-			//  b. If k < 0, const k be 0.
-			var k = Math.max(n >= 0 ? n : len - Math.abs(n), 0);
-
-			// 7. Repeat, while k < len
-			while (k < len) {
-				// a. const elementK be the result of ? Get(O, ! ToString(k)).
-				// b. If SameValueZero(searchElement, elementK) is true, return true.
-				// c. Increase k by 1.
-				// NOTE: === provides the correct "SameValueZero" comparison needed here.
-				if (o[k] === searchElement) {
-					return true;
-				}
-				k++;
-			}
-
-			// 8. Return false
-			return false;
-		}
-	});
-}
-
-if (!String.prototype.includes) {
-	String.prototype.includes = function () {
-		return String.prototype.indexOf.apply(this, arguments) !== -1;
-	};
-}
-
-// String.startsWith polyfill
-// Reference: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/startsWith#Polyfill
 if (!String.prototype.startsWith) {
 	String.prototype.startsWith = function (searchString, position) {
 		position = position || 0;
@@ -8365,7 +8190,83 @@ if (!String.prototype.startsWith) {
 	};
 }
 
-},{"2":2}],27:[function(_dereq_,module,exports){
+if (!Element.prototype.matches) {
+	Element.prototype.matches = Element.prototype.matchesSelector || Element.prototype.mozMatchesSelector || Element.prototype.msMatchesSelector || Element.prototype.oMatchesSelector || Element.prototype.webkitMatchesSelector || function (s) {
+		var matches = (this.document || this.ownerDocument).querySelectorAll(s),
+		    i = matches.length - 1;
+		while (--i >= 0 && matches.item(i) !== this) {}
+		return i > -1;
+	};
+}
+
+if (window.Element && !Element.prototype.closest) {
+	Element.prototype.closest = function (s) {
+		var matches = (this.document || this.ownerDocument).querySelectorAll(s),
+		    i = void 0,
+		    el = this;
+		do {
+			i = matches.length;
+			while (--i >= 0 && matches.item(i) !== el) {}
+		} while (i < 0 && (el = el.parentElement));
+		return el;
+	};
+}
+
+(function () {
+	var lastTime = 0;
+	var vendors = ['ms', 'moz', 'webkit', 'o'];
+	for (var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
+		window.requestAnimationFrame = window[vendors[x] + 'RequestAnimationFrame'];
+		window.cancelAnimationFrame = window[vendors[x] + 'CancelAnimationFrame'] || window[vendors[x] + 'CancelRequestAnimationFrame'];
+	}
+
+	if (!window.requestAnimationFrame) window.requestAnimationFrame = function (callback) {
+		var currTime = new Date().getTime();
+		var timeToCall = Math.max(0, 16 - (currTime - lastTime));
+		var id = window.setTimeout(function () {
+			callback(currTime + timeToCall);
+		}, timeToCall);
+		lastTime = currTime + timeToCall;
+		return id;
+	};
+
+	if (!window.cancelAnimationFrame) window.cancelAnimationFrame = function (id) {
+		clearTimeout(id);
+	};
+})();
+
+if (/firefox/i.test(navigator.userAgent)) {
+	var getComputedStyle = window.getComputedStyle;
+	window.getComputedStyle = function (el, pseudoEl) {
+		var t = getComputedStyle(el, pseudoEl);
+		return t === null ? { getPropertyValue: function getPropertyValue() {} } : t;
+	};
+}
+
+if (!window.Promise) {
+	window.Promise = _promisePolyfill2.default;
+}
+
+(function (constructor) {
+	if (constructor && constructor.prototype && constructor.prototype.children === null) {
+		Object.defineProperty(constructor.prototype, 'children', {
+			get: function get() {
+				var i = 0,
+				    node = void 0,
+				    nodes = this.childNodes,
+				    children = [];
+				while (node = nodes[i++]) {
+					if (node.nodeType === 1) {
+						children.push(node);
+					}
+				}
+				return children;
+			}
+		});
+	}
+})(window.Node || window.Element);
+
+},{"2":2,"4":4}],30:[function(_dereq_,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -8377,45 +8278,29 @@ exports.timeCodeToSeconds = timeCodeToSeconds;
 exports.calculateTimeFormat = calculateTimeFormat;
 exports.convertSMPTEtoSeconds = convertSMPTEtoSeconds;
 
-var _mejs = _dereq_(6);
+var _mejs = _dereq_(7);
 
 var _mejs2 = _interopRequireDefault(_mejs);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-/**
- * Indicate if FPS is dropFrame (typically non-integer frame rates: 29.976)
- *
- * @param {Number} fps - Frames per second
- * @return {Boolean}
- */
 function isDropFrame() {
 	var fps = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 25;
 
 	return !(fps % 1 === 0);
 }
-/**
- * Format a numeric time in format '00:00:00'
- *
- * @param {Number} time - Ideally a number, but if not or less than zero, is defaulted to zero
- * @param {Boolean} forceHours
- * @param {Boolean} showFrameCount
- * @param {Number} fps - Frames per second
- * @param {Number} secondsDecimalLength - Number of decimals to display if any
- * @return {String}
- */
 function secondsToTimeCode(time) {
 	var forceHours = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : false;
 	var showFrameCount = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : false;
 	var fps = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : 25;
 	var secondsDecimalLength = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : 0;
+	var timeFormat = arguments.length > 5 && arguments[5] !== undefined ? arguments[5] : 'hh:mm:ss';
 
 
 	time = !time || typeof time !== 'number' || time < 0 ? 0 : time;
 
 	var dropFrames = Math.round(fps * 0.066666),
-	    // Number of drop frames to drop on the minute marks (6%)
-	timeBase = Math.round(fps),
+	    timeBase = Math.round(fps),
 	    framesPer24Hours = Math.round(fps * 3600) * 24,
 	    framesPer10Minutes = Math.round(fps * 600),
 	    frameSep = isDropFrame(fps) ? ';' : ':',
@@ -8448,7 +8333,7 @@ function secondsToTimeCode(time) {
 		if (showFrameCount) {
 			seconds = timeBaseDivision % 60;
 		} else {
-			seconds = (f / timeBase % 60).toFixed(secondsDecimalLength);
+			seconds = Math.floor(f / timeBase % 60).toFixed(secondsDecimalLength);
 		}
 	} else {
 		hours = Math.floor(time / 3600) % 24;
@@ -8456,33 +8341,43 @@ function secondsToTimeCode(time) {
 		if (showFrameCount) {
 			seconds = Math.floor(time % 60);
 		} else {
-			seconds = (time % 60).toFixed(secondsDecimalLength);
+			seconds = Math.floor(time % 60).toFixed(secondsDecimalLength);
 		}
 	}
 	hours = hours <= 0 ? 0 : hours;
 	minutes = minutes <= 0 ? 0 : minutes;
 	seconds = seconds <= 0 ? 0 : seconds;
 
-	var result = forceHours || hours > 0 ? (hours < 10 ? '0' + hours : hours) + ':' : '';
-	result += (minutes < 10 ? '0' + minutes : minutes) + ':';
-	result += '' + (seconds < 10 ? '0' + seconds : seconds);
+	seconds = seconds === 60 ? 0 : seconds;
+	minutes = minutes === 60 ? 0 : minutes;
+
+	var timeFormatFrags = timeFormat.split(':');
+	var timeFormatSettings = {};
+	for (var i = 0, total = timeFormatFrags.length; i < total; ++i) {
+		var unique = '';
+		for (var j = 0, t = timeFormatFrags[i].length; j < t; j++) {
+			if (unique.indexOf(timeFormatFrags[i][j]) < 0) {
+				unique += timeFormatFrags[i][j];
+			}
+		}
+		if (~['f', 's', 'm', 'h'].indexOf(unique)) {
+			timeFormatSettings[unique] = timeFormatFrags[i].length;
+		}
+	}
+
+	var result = forceHours || hours > 0 ? (hours < 10 && timeFormatSettings.h > 1 ? '0' + hours : hours) + ':' : '';
+	result += (minutes < 10 && timeFormatSettings.m > 1 ? '0' + minutes : minutes) + ':';
+	result += '' + (seconds < 10 && timeFormatSettings.s > 1 ? '0' + seconds : seconds);
 
 	if (showFrameCount) {
 		frames = (f % timeBase).toFixed(0);
 		frames = frames <= 0 ? 0 : frames;
-		result += frames < 10 ? frameSep + '0' + frames : '' + frameSep + frames;
+		result += frames < 10 && timeFormatSettings.f ? frameSep + '0' + frames : '' + frameSep + frames;
 	}
 
 	return result;
 }
 
-/**
- * Convert a '00:00:00' time string into seconds
- *
- * @param {String} time
- * @param {Number} fps - Frames per second
- * @return {Number}
- */
 function timeCodeToSeconds(time) {
 	var fps = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 25;
 
@@ -8495,7 +8390,7 @@ function timeCodeToSeconds(time) {
 		time = time.replace(';', ':');
 	}
 
-	if (!time.match(/\d{2}(\:\d{2}){0,3}/)) {
+	if (!/\d{2}(\:\d{2}){0,3}/i.test(time)) {
 		throw new TypeError('Time code must have the format `00:00:00`');
 	}
 
@@ -8508,8 +8403,7 @@ function timeCodeToSeconds(time) {
 	    frames = 0,
 	    totalMinutes = 0,
 	    dropFrames = Math.round(fps * 0.066666),
-	    // Number of drop frames to drop on the minute marks (6%)
-	timeBase = Math.round(fps),
+	    timeBase = Math.round(fps),
 	    hFrames = timeBase * 3600,
 	    mFrames = timeBase * 60;
 
@@ -8545,15 +8439,6 @@ function timeCodeToSeconds(time) {
 	return parseFloat(output.toFixed(3));
 }
 
-/**
- * Calculate the time format to use
- *
- * There is a default format set in the options but it can be incomplete, so it is adjusted according to the media
- * duration. Format: 'hh:mm:ss:ff'
- * @param {*} time - Ideally a number, but if not or less than zero, is defaulted to zero
- * @param {Object} options
- * @param {Number} fps - Frames per second
- */
 function calculateTimeFormat(time, options) {
 	var fps = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 25;
 
@@ -8574,7 +8459,7 @@ function calculateTimeFormat(time, options) {
 	    required = false;
 
 	for (var i = 0, len = lis.length; i < len; i++) {
-		if (format.indexOf(lis[i][1]) > -1) {
+		if (~format.indexOf(lis[i][1])) {
 			required = true;
 		} else if (required) {
 			var hasNextValue = false;
@@ -8600,15 +8485,9 @@ function calculateTimeFormat(time, options) {
 		}
 	}
 
-	options.currentTimeFormat = format;
+	options.timeFormat = format;
 }
 
-/**
- * Convert Society of Motion Picture and Television Engineers (SMTPE) time code into seconds
- *
- * @param {String} SMPTE
- * @return {Number}
- */
 function convertSMPTEtoSeconds(SMPTE) {
 
 	if (typeof SMPTE !== 'string') {
@@ -8617,7 +8496,7 @@ function convertSMPTEtoSeconds(SMPTE) {
 
 	SMPTE = SMPTE.replace(',', '.');
 
-	var decimalLen = SMPTE.indexOf('.') > -1 ? SMPTE.split('.')[1].length : 0;
+	var decimalLen = ~SMPTE.indexOf('.') ? SMPTE.split('.')[1].length : 0;
 
 	var secs = 0,
 	    multiplier = 1;
@@ -8640,4 +8519,4 @@ _mejs2.default.Utils.timeCodeToSeconds = timeCodeToSeconds;
 _mejs2.default.Utils.calculateTimeFormat = calculateTimeFormat;
 _mejs2.default.Utils.convertSMPTEtoSeconds = convertSMPTEtoSeconds;
 
-},{"6":6}]},{},[26,5,4,14,21,18,17,19,20,22,15,16,8,9,10,11,12,13]);
+},{"7":7}]},{},[29,6,5,15,23,20,19,21,22,24,16,18,17,9,10,11,12,13,14]);

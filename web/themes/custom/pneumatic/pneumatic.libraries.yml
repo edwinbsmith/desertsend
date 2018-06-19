@@ -34,9 +34,9 @@ alert_close:
 
 messages:
   version: VERSION
-#  css:
-#    theme:
-#      css/mediaelementplayer.css: {}
+  css:
+    theme:
+      css/mediaelementplayer.css: {}
   js:
     js/mediaelement-and-player.js: {}
     js/messages.js: {}
