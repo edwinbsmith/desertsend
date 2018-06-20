@@ -277,6 +277,7 @@ function pneumatic_menu_local_task(&$variables) {
   return render($variables['link']);
 }
 
+
 function pneumatic_get_series_graphic(Drupal\node\Entity\Node $node) {
   /** @var Drupal\file\Entity\File $series_graphic */
   $series_graphic      = $node->get('field_message_series')->entity->get('field_series_graphic')->entity;

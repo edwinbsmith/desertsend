@@ -24,6 +24,7 @@
 {% for type, messages in message_list %}
   <div id="status-messages"
        role="contentinfo"
+       data-reveal
        aria-label="{{ status_headings[type] }}"{{ attributes.addClass('reveal')|without('role', 'aria-label') }}>
     {% if type == 'error' %}
       <div role="alert">
@@ -48,4 +49,3 @@
     </button>
   </div>
 {% endfor %}
-{{ attach_library('phoenix/status_in_reveal') }}
