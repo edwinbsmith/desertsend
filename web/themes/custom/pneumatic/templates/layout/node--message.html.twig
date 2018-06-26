@@ -96,6 +96,12 @@
         <div class="page-content__body">
           {{ content.body }}
         </div>
+        {% if content.field_message_attachments|render %}
+        <div class="page-content__extra">
+          <h4>Additional Content</h4>
+          {{ content.field_message_attachments }}
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
