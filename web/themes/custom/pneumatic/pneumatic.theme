@@ -89,22 +89,23 @@ function pneumatic_page_attachments_alter(&$page) {
  */
 function pneumatic_preprocess_page(&$variables) {
 
-  if (!$variables['is_front']) {
+  if (!$variables['is_front'] && isset($variables['node'])) {
 
     // Move the page title to the header.
 //    $variables['page']['header'] = $variables['page']['content']['pneumatic_page_title'];
 //    unset($variables['page']['content']['pneumatic_page_title']);
 
-    // Adjust the styles based on the node.
-    if (isset($variables['node']) && 'message' == $variables['node']->getType()) {
-      $path                                                = pneumatic_get_series_graphic($variables['node']);
-      $variables['page']['header']['#attributes']['style'] = sprintf('background-image: url(%s);', $path);
-      $page_title_class                                    = 'title-banner';
+    /** @var \Drupal\node\Entity\Node $node */
+    $node = $variables['node'];
+    if ('message' === $node->getType()) {
+      $path                                                = pneumatic_get_series_graphic($node);
+      // $variables['page']['header']['#attributes']['style'] = sprintf('background-image: url(%s); height: 400px', $path);
+      // $page_title_class                                    = 'title-banner';
     } else {
-      $page_title_class = 'title-simple';
+      // $page_title_class = 'title-simple';
     }
 
-    $variables['page']['header']['#attributes']['class'] = [$page_title_class];
+    // $variables['page']['header']['#attributes']['class'] = [$page_title_class];
   }
 
   if (isset($variables['page']['content']['pneumatic_content'])) {
@@ -161,6 +162,7 @@ function pneumatic_preprocess_maintenance_page(&$variables) {
  * Implements hook_preprocess_HOOK() for node.html.twig.
  */
 function pneumatic_preprocess_node(&$variables) {
+
   /** @var Drupal\node\Entity\Node $node */
   $node = $variables['node'];
   if ($variables['view_mode'] === 'full' && 'message' === $node->getType()) {

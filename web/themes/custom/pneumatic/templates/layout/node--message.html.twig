@@ -74,6 +74,11 @@
   <div{{ content_attributes.addClass('page-content') }}>
     <div class="grid-x grid-margin-x align-center">
       <div class="cell large-7">
+        <ul class="message__details">
+          <li><strong>{{ content.field_message_date }}</strong></li>
+          <li>Given by: <strong>{{ content.field_message_author }}</strong></li>
+          <li>Series: <strong>{{ content.field_message_series }}</strong></li>
+        </ul>
         <div class="page-content__callout">
           <div class="message-player">
             <div class="grid-x">
@@ -88,19 +93,8 @@
             </div>
           </div>
         </div>
-      </div>
-      <div class="cell large-7">
-        <div class="grid-x grid-margin-x">
-          <div class="cell large-5">
-            <ul class="message__details">
-              <li><strong>{{ content.field_message_date }}</strong></li>
-              <li>Given by: <strong>{{ content.field_message_author }}</strong></li>
-              <li>Series: <strong>{{ content.field_message_series }}</strong></li>
-            </ul>
-          </div>
-          <div class="cell large-7">
-            {{ content.body }}
-          </div>
+        <div class="page-content__body">
+          {{ content.body }}
         </div>
       </div>
     </div>
