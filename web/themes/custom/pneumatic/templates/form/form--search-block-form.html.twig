@@ -10,18 +10,14 @@
  * @see template_preprocess_form()
  */
 #}
-<div class="row">
-  <div class="columns">
-    <form{{ attributes.addClass('inline-search-form') }}>
-      <div class="input-group">
-        <div class="js-form-item form-item js-form-type-search form-item-keys js-form-item-keys form-no-label">
-          <label for="edit-keys" class="visually-hidden">Search</label>
-          <input title="Enter the terms you wish to search for." data-drupal-selector="edit-keys" type="search" id="edit-keys" name="keys" class="form-search input-group-field" placeholder="Search here...">
-        </div>
-        <div data-drupal-selector="edit-actions" class="form-actions js-form-wrapper form-wrapper input-group-button" id="edit-actions">
-          <input data-drupal-selector="edit-submit" type="submit" id="edit-submit" value="&#xf002;" class="button js-form-submit form-submit">
-        </div>
-      </div>
-    </form>
+<form{{ attributes.addClass('inline-search-form') }}>
+  <div class="input-group">
+    <div class="js-form-item form-item js-form-type-search form-item-keys js-form-item-keys form-no-label" style="width: 100%;">
+      <label for="edit-keys" class="visually-hidden">Search</label>
+      <input title="Enter the terms you wish to search for." data-drupal-selector="edit-keys" type="search" id="edit-keys" name="keys" class="form-search input-group-field" placeholder="Search here...">
+    </div>
+    <div data-drupal-selector="edit-actions" class="form-actions js-form-wrapper form-wrapper input-group-button" id="edit-actions">
+      <button type="submit" data-drupal-selector="edit-submit" id="edit-submit" class="button js-form-submit form-submit"><i class="fas fa-search"></i></button>
+    </div>
   </div>
-</div>
+</form>

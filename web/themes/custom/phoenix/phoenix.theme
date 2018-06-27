@@ -223,7 +223,8 @@ function phoenix_theme_suggestions_form_alter(array &$suggestions, array $variab
     'views-exposed-form-message-archive-archive',
     'views-exposed-form-message-archive-by-series',
     'views-exposed-form-message-archive-by-speaker',
-    'views-exposed-form-search-content-main'
+    'views-exposed-form-search-content-main',
+    'search-block-form'
   ];
   if (in_array($variables['element']['#id'], $search_field_ids)) {
     $suggestions[] = 'form__search_block_form';

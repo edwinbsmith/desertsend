@@ -20,7 +20,6 @@ regions:
   sidebar_first: 'Left Sidebar'
   sidebar_second: 'Right Sidebar'
   footer: 'Footer'
-  right_off_canvas: 'Right off canvas'
 regions_hidden:
   page_top: 'Page Top'
   page_bottom: 'Page bottom'
