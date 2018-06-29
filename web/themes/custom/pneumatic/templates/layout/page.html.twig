@@ -89,7 +89,7 @@
       <div class="cell large-6 contact">
         <div class="grid-x grid-margin-x">
           <div class="cell medium-6">
-            {{ page.footer.desertsendmap }}
+            {{ page.footer.map }}
           </div>
           <div class="cell medium-6">
             <ul class="vertical menu">
@@ -104,16 +104,19 @@
                   <div class="cell small-1"><i class="fas fa-envelope"></i></div>
                   <div class="cell small-10"> Mailing Address<br>{{ contact.mailing_address }}</div>
                 </div>
-
               </li>
-              <li><i class="fa fa-laptop"></i> {{ contact.office_email }}<br></li>
-              <li><i class="fa fa-phone"></i> {{ contact.office_phone }}</li>
-            </ul>
-            <br>
-            <ul class="simple menu contact__social">
-              <li><a href="https://www.facebook.com/desertsend" target="_blank"><i class="fab fa-facebook-square"></i></a></li>
-              <li><a href="https://twitter.com/desertsend" target="_blank"><i class="fab fa-twitter-square"></i></a></li>
-              <li><a href="https://www.instagram.com/thewellatasu/" target="_blank"><i class="fab fa-instagram"></i></a></li>
+              <li>
+                <div class="grid-x grid-margin-x">
+                  <div class="cell small-1"><i class="fa fa-laptop"></i></div>
+                  <div class="cell small-10">{{ contact.office_email }}</div>
+                </div>
+              </li>
+              <li>
+                <div class="grid-x grid-margin-x">
+                  <div class="cell small-1"><i class="fa fa-phone"></i></div>
+                  <div class="cell small-10">{{ contact.office_phone }}</div>
+                </div>
+              </li>
             </ul>
           </div>
         </div>
@@ -123,17 +126,27 @@
           <div class="cell medium-12">
             {{ page.footer.searchform }}
           </div>
-          <div class="cell medium-12">
+          <div class="cell medium-6">
             {{ page.footer.pneumatic_footer }}
+          </div>
+          <div class="cell medium-6">
+            <img class="gcc-logo" src="/{{ theme_path }}/images/gcc-logo-gray.png" alt="">
           </div>
         </div>
       </div>
     </div>
   </footer>
   <div class="subfooter">
-    <div class="grid-x grid-margin-x">
-      <div class="cell medium-6 columns end">
+    <div class="grid-x grid-padding-x">
+      <div class="cell medium-6">
         <p class="copyright">&copy; {{ "now"|date("Y") }} Desert's End Church. Soli Deo Gloria.</p>
+      </div>
+      <div class="cell medium-6">
+        <ul class="menu align-right subfooter__social">
+          <li><a href="https://www.facebook.com/desertsend" target="_blank"><i class="fab fa-facebook-square"></i></a></li>
+          <li><a href="https://twitter.com/desertsend" target="_blank"><i class="fab fa-twitter-square"></i></a></li>
+          <li><a href="https://www.instagram.com/thewellatasu/" target="_blank"><i class="fab fa-instagram"></i></a></li>
+        </ul>
       </div>
     </div>
   </div>
