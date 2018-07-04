@@ -108,12 +108,12 @@ function pneumatic_preprocess_page(&$variables) {
     // $variables['page']['header']['#attributes']['class'] = [$page_title_class];
   }
 
-  if (isset($variables['page']['content']['pneumatic_content'])) {
+  /*if (isset($variables['page']['content']['pneumatic_content'])) {
     $has_sidebar = !empty($variables['page']['sidebar_left']);
     if ($has_sidebar) {
       $variables['page']['content']['pneumatic_content']['#attributes']['class'] = ['with-sidebar'];
     }
-  }
+  }*/
 
   $contact                 = \Drupal::config('desertsend.contact')->get();
   $variables['contact']    = $contact;
@@ -165,23 +165,26 @@ function pneumatic_preprocess_node(&$variables) {
 
   /** @var Drupal\node\Entity\Node $node */
   $node = $variables['node'];
-  if ($variables['view_mode'] === 'full' && 'message' === $node->getType()) {
-
-    $variables['series_graphic'] = pneumatic_get_series_graphic($node);
-
-    /** @var Drupal\file\Entity\File $file */
-    $file                                                                     = $node->get('field_message_audio')->entity;
-    $path                                                                     = file_create_url($file->getFileUri());
-    $variables['#attached']['library'][]                                      = 'pneumatic/messages';
-    $variables['#attached']['drupalSettings']['pneumatic']['messages']['audio'] = $path;
-
-  }
-
-  if ($variables['view_mode'] === 'teaser' && 'message' === $node->getType()) {
-    /** @var \Drupal\taxonomy\Entity\Term $term */
-    $term = \Drupal::routeMatch()->getParameter('taxonomy_term');
-    if ( null !== $term ) {
-      $variables['vocabulary'] = $term->bundle();
+  if ('message' === $node->getType()) {
+    switch ($variables['view_mode']) {
+      case 'front_page':
+        $variables['series_graphic'] = pneumatic_get_series_graphic($node);
+        break;
+      case 'full':
+        $variables['series_graphic'] = pneumatic_get_series_graphic($node);
+        /** @var Drupal\file\Entity\File $file */
+        $file                                                                     = $node->get('field_message_audio')->entity;
+        $path                                                                     = file_create_url($file->getFileUri());
+        $variables['#attached']['library'][]                                      = 'pneumatic/messages';
+        $variables['#attached']['drupalSettings']['pneumatic']['messages']['audio'] = $path;
+        break;
+      case 'teaser':
+        /** @var \Drupal\taxonomy\Entity\Term $term */
+        $term = \Drupal::routeMatch()->getParameter('taxonomy_term');
+        if ( null !== $term ) {
+          $variables['vocabulary'] = $term->bundle();
+        }
+        break;
     }
   }
 
@@ -251,6 +254,8 @@ function pneumatic_theme_suggestions_form_alter(array &$suggestions, array $vari
   ];
   if (in_array($variables['element']['#id'], $search_field_ids)) {
     $suggestions[] = 'form__search_block_form';
+  } elseif ($variables['element']['#id'] === 'contact-message-church-contact-form-form') {
+    $suggestions[] = 'form__contact_form';
   }
 }
 

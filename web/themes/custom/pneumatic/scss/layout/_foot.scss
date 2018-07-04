@@ -79,7 +79,7 @@
 
 .contact {
   padding: 1rem;
-  background-color: map-get($de-color, secondary);
+  background-color: map-get($de-color, primary);
   @include breakpoint(large) {
 
     padding-top: 1rem;
