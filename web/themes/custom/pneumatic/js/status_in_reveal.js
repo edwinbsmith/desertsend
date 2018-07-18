@@ -13,13 +13,13 @@
       $('#status-messages').once('foundation-reveal').each(function() {
         // Move the status messages out of the highlighted region.
         var $messages = $(this);
-        var $region = $messages.parent();
-        $messages.appendTo('body');
+        // var $region = $messages.parent();
+        // $messages.appendTo('body');
         $messages.foundation('open');
 
         // This is required as this region will likely be empty after status
         // messages are removed.
-        $region.html($region.html().replace(/\n/g, ''));
+        // $region.html($region.html().replace(/\n/g, ''));
       });
     }
   };
