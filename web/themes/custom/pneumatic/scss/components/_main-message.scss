@@ -2,6 +2,7 @@
   // padding: 2rem 0;
   background: get-color(secondary);
   box-shadow: inset 0 1px 3px get-color(primary);
+  position: relative;
 
   @mixin image-sizes($reversed: false){
     $small: 210px;
@@ -33,6 +34,16 @@
   &__wrap {
     @include image-sizes();
     overflow: hidden;
+  }
+
+  &__heading {
+    position: absolute;
+    left: 50%;
+    z-index: 99;
+    transform: translateX(-50%);
+    background: $primary-color;
+    padding: .5rem 4rem;
+    color: $white;
   }
 
   &__image {

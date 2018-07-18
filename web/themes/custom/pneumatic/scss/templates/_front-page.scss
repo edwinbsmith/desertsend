@@ -13,3 +13,19 @@
     color: #04354c;
   }
 }
+
+.context {
+
+  padding: 3rem 0;
+
+  &__title {
+    font-size: 3.2rem;
+  }
+
+  &__statement {
+    border: none;
+    font-size: 24px;
+    font-family: $header-font-family;
+    color: #04354c;
+  }
+}

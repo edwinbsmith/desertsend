@@ -78,8 +78,10 @@
       {% if is_front %}
         {{ page.content }}
       {% else %}
-        <div class="grid-container">
-          {{ page.content }}
+        <div class="grid-x grid-padding-x align-center">
+          <div class="cell large-8">
+            {{ page.content }}
+          </div>
         </div>
       {% endif %}
     </div>
