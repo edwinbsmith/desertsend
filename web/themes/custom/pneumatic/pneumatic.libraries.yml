@@ -1,6 +1,6 @@
 global:
   version: VERSION
-  # header: true
+  header: true
   css:
     base:
       css/app.css: {}
