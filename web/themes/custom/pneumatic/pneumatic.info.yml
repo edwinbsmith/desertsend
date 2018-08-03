@@ -8,6 +8,8 @@ core: 8.x
 
 libraries:
   - pneumatic/global
+libraries-override:
+  system/base: false
 
 regions:
   meta_header: 'Meta header'

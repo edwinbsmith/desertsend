@@ -1,14 +1,15 @@
 global:
   version: VERSION
+  # header: true
   css:
     base:
       css/app.css: {}
   js:
     js/foundation.min.js: {}
     js/foundation_init.js: {}
-    js/top_bar_active.js: {}
+    # js/top_bar_active.js: {}
     js/fontawesome-all.min.js: {}
-    js/status_in_reveal.js: {}
+    # js/status_in_reveal.js: {}
     # js/motion-ui.min.js: {}
   dependencies:
     - core/jquery
