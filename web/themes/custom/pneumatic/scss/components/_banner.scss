@@ -3,6 +3,10 @@
   background-size: cover;
   background-position: center center;
 
+  @include breakpoint(medium down) {
+    height: 150px;
+  }
+
   img {
     display: none;
   }

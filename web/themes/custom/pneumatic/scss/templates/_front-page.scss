@@ -2,6 +2,10 @@
 
   padding: 3rem 0;
 
+  @include breakpoint(medium down) {
+    padding: 1.2rem 0;
+  }
+
   &__title {
     font-size: 3.2rem;
   }
@@ -11,6 +15,10 @@
     font-size: 24px;
     font-family: $header-font-family;
     color: #04354c;
+
+    @include breakpoint(medium down) {
+      font-size: 18px;
+    }
   }
 }
 
@@ -20,6 +28,11 @@
 
   &__title {
     font-size: 3.2rem;
+
+    @include breakpoint(medium down) {
+      font-size: 2rem;
+      text-align: center;
+    }
   }
 
   &__statement {

@@ -84,4 +84,10 @@
 
 .menu-browse-messages {
   margin-bottom: 1rem;
+
+  .menu-text, a {
+    @include breakpoint(medium down) {
+      padding: .7rem .5rem;
+    }
+  }
 }

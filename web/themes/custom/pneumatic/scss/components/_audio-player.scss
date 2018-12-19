@@ -13,5 +13,9 @@
       color: $light-gray;
       border-color: $light-gray;
     }
+
+    @include breakpoint(small) {
+      @include button-expand();
+    }
   }
 }
