@@ -238,6 +238,10 @@ padding-bottom: 2rem;
     height: 100%;
   }
 
+  &__wrap {
+    position: relative;
+  }
+
   &__label {
     color: $dark-gray;
     font-size: .8rem;

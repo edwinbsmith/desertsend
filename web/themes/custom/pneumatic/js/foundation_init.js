@@ -47,4 +47,13 @@
         }
     };
 
+    Drupal.behaviors.common = {
+        attach: function (context, settings) {
+            var siteTitle = jQuery('.site-title__text-wrap');
+            var siteImage = jQuery('.site-title__logo');
+            var rightEdge = siteTitle.position().left + siteTitle.width();
+            siteImage.css({'position': 'absolute', 'left':rightEdge - 50 + 'px'});
+        }
+    }
+
 })(jQuery, Drupal);

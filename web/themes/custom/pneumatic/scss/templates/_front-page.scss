@@ -28,6 +28,7 @@
 
   &__title {
     font-size: 3.2rem;
+    text-align: center;
 
     @include breakpoint(medium down) {
       font-size: 2rem;
