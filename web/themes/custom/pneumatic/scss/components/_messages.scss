@@ -229,3 +229,40 @@ padding-bottom: 2rem;
 }
 
 .archive-message {  }
+
+.series-current {
+
+  margin-bottom: 2rem;
+
+  img  {
+    height: 100%;
+  }
+
+  &__label {
+    color: $dark-gray;
+    font-size: .8rem;
+    line-height: .8rem;
+    margin-bottom: -6px;
+  }
+
+  &__date {
+    color: $dark-gray;
+    font-size: .8rem;
+    line-height: .8rem;
+    margin-left: -6px;
+
+    &::before {
+      content: '-';
+    }
+  }
+
+  &__name {
+    margin-bottom: 2px;
+  }
+
+  &__footer {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+  }
+}
