@@ -17,6 +17,8 @@ use Drupal\Core\Link;
  */
 function pneumatic_preprocess_html(&$variables) {
 
+  $variables['theme_path'] = drupal_get_path('theme', 'pneumatic');
+
   // Add information about the number of sidebars.
   if (!empty($variables['page']['sidebar_first']) && !empty($variables['page']['sidebar_second'])) {
     $variables['attributes']['class'][] = 'layout-two-sidebars';
