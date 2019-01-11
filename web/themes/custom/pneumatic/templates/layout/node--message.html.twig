@@ -96,7 +96,7 @@
         <div class="page-content__body">
           {{ content.body }}
         </div>
-        {% if content.field_message_attachments %}
+        {% if content.field_message_attachments[0] %}
         <div class="page-content__extra">
           <h4>Additional Content</h4>
           {{ content.field_message_attachments }}
