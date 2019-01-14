@@ -1,0 +1,10 @@
+p a {
+  display: inline-block;
+  color: #086a98;
+  line-height: 1.2rem;
+  border-bottom: 1px solid #086a98;
+
+  &:hover {
+    border-bottom: 1px solid #032e41;
+  }
+}
