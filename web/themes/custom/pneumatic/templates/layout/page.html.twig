@@ -129,10 +129,15 @@
             {{ page.footer.searchform }}
           </div>
           <div class="cell medium-6">
-            {{ page.footer.pneumatic_footer }}
+            <button class="button expanded tithely-give-btn" data-church-id="713537">Give to Desert's End</button>
+            <script src="https://tithe.ly/widget/v3/give.js?3"></script>
+            <script>
+                var tw = create_tithely_widget();
+            </script>
           </div>
           <div class="cell medium-6">
-            <img class="gcc-logo" src="/{{ theme_path }}/images/gcc-logo-gray.png" alt="">
+            {{ page.footer.pneumatic_footer }}
+            <!-- <img class="gcc-logo" src="/{{ theme_path }}/images/gcc-logo-gray.png" alt=""> -->
           </div>
         </div>
       </div>
