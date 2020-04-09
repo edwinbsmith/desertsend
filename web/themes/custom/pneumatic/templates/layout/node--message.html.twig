@@ -79,6 +79,7 @@
           <li>Given by: <strong>{{ content.field_message_author }}</strong></li>
           <li>Series: <strong>{{ content.field_message_series }}</strong></li>
         </ul>
+        {% if content.field_message_audio.0 %}
         <div class="page-content__callout">
           <div class="message-player">
             <div class="grid-x">
@@ -93,6 +94,7 @@
             </div>
           </div>
         </div>
+        {% endif %}
         <div class="page-content__body">
           {{ content.body }}
         </div>
