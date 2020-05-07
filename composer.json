@@ -46,6 +46,7 @@
         "drupal/redirect": "^1.1",
         "drupal/search_api": "^1.7",
         "drupal/smtp": "^1.0@beta",
+        "drupal/upgrade_status": "^2.0",
         "drupal/video_filter": "^1.0@alpha",
         "drupal/webform": "^5.0@RC",
         "drupal/zurb_foundation": "^6.0",
