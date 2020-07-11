@@ -4,6 +4,7 @@ base theme: classy
 description: 'A theme for Deserts End based on the Stark theme and Foundation for Sites.'
 package: DesertsEnd
 version: VERSION
+core_version_requirement: ^8 || ^9
 core: 8.x
 
 # Define the global styles and Foundation libraries.

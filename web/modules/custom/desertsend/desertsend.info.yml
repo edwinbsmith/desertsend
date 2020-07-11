@@ -1,5 +1,6 @@
-name: desertsend
+name: "Desert's End"
 type: module
-description: Desert's End Church Custom Settings
+description: "Desert's End Church Custom Settings"
 core: 8.x
-package: Desert's End
+core_version_requirement: ^8 || ^9
+package: "Desert's End"
