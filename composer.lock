@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "54e8832169e32677195985b63133dec3",
+    "content-hash": "fe2c723756704d973d41caeb2785293c",
     "packages": [
         {
             "name": "asm89/stack-cors",
@@ -3628,6 +3628,66 @@
                 "source": "https://cgit.drupalcode.org/pathauto",
                 "issues": "https://www.drupal.org/project/issues/pathauto",
                 "documentation": "https://www.drupal.org/docs/8/modules/pathauto"
+            }
+        },
+        {
+            "name": "drupal/podcast",
+            "version": "1.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://git.drupalcode.org/project/podcast.git",
+                "reference": "8.x-1.1"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://ftp.drupal.org/files/projects/podcast-8.x-1.1.zip",
+                "reference": "8.x-1.1",
+                "shasum": "bd1c122f8c1b0638ec64aaf27f9c93dcc0694032"
+            },
+            "require": {
+                "drupal/core": "^8 || ^9"
+            },
+            "require-dev": {
+                "upstreamable/md-to-html": "^1.0"
+            },
+            "type": "drupal-module",
+            "extra": {
+                "drupal": {
+                    "version": "8.x-1.1",
+                    "datestamp": "1590951753",
+                    "security-coverage": {
+                        "status": "covered",
+                        "message": "Covered by Drupal's security advisory policy"
+                    }
+                }
+            },
+            "notification-url": "https://packages.drupal.org/8/downloads",
+            "scripts": {
+                "md-to-html": [
+                    "MdToHtml\\composer\\ScriptHandler::transform"
+                ],
+                "generate-readme": [
+                    "@md-to-html --remove-first-line README.md README.html"
+                ]
+            },
+            "license": [
+                "GPL-2.0-or-later"
+            ],
+            "authors": [
+                {
+                    "name": "e0ipso",
+                    "homepage": "https://www.drupal.org/user/550110"
+                },
+                {
+                    "name": "rodrigoaguilera",
+                    "homepage": "https://www.drupal.org/user/408170"
+                }
+            ],
+            "description": "Allows creating podcasts using views",
+            "homepage": "https://www.drupal.org/project/podcast",
+            "support": {
+                "source": "https://git.drupalcode.org/project/podcast",
+                "issues": "https://www.drupal.org/project/issues/podcast"
             }
         },
         {
