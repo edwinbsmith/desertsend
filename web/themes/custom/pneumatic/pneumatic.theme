@@ -173,7 +173,7 @@ function pneumatic_preprocess_node(&$variables) {
         $variables['series_graphic'] = pneumatic_get_series_graphic($node);
         /** @var Drupal\file\Entity\File $file */
         $audio_field = $node->get('field_message_audio');
-        if ( ! $audio_field->isEmpty() ) {
+        if ( $audio_field->getEntity()->hasField('uri') ) {
           $file = $audio_field->entity;
           $path = file_create_url($file->getFileUri());
 
