@@ -45,6 +45,7 @@
         "drupal/media_entity_browser": "^2.0",
         "drupal/media_entity_download": "^2.0",
         "drupal/metatag": "^1.13",
+        "drupal/module_missing_message_fixer": "^2.0",
         "drupal/paragraphs": "^1.12",
         "drupal/pathauto": "^1.8",
         "drupal/podcast": "^1.1",
@@ -59,7 +60,11 @@
         "drush/drush": "^10.3",
         "kint-php/kint": "^3.3",
         "kint-php/kint-twig": "^3.0",
-        "league/oauth2-google": "^3.0"
+        "league/oauth2-google": "^3.0",
+        "drupal/jquery_ui": "^1.0",
+        "drupal/jquery_ui_datepicker": "^1.0",
+        "drupal/jquery_ui_tabs": "^1.0",
+        "drupal/jquery_ui_tooltip": "^1.0"
     },
     "conflict": {
         "drupal/drupal": "*"
