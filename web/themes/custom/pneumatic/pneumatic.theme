@@ -291,7 +291,11 @@ function pneumatic_menu_local_task(&$variables) {
 
 function pneumatic_get_series_graphic(Drupal\node\Entity\Node $node) {
   /** @var Drupal\file\Entity\File $series_graphic */
-  $series_graphic      = $node->get('field_message_series')->entity->get('field_series_graphic')->entity;
-  $series_graphic_path = file_create_url($series_graphic->getFileUri());
+  try {
+    $series_graphic      = $node->get('field_message_series')->entity->get('field_series_graphic')->entity;
+    $series_graphic_path = file_create_url($series_graphic->getFileUri());
+  } catch (Error $error) {
+    $series_graphic_path = '';
+  }
   return $series_graphic_path;
 }
