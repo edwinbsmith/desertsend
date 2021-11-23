@@ -24,3 +24,6 @@
 /.idea/
 /.editorconfig
 /.gitattributes
+
+# Ignore development file
+/web/sites/development.services.yml
